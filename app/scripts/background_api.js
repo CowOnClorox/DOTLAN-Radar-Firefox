@@ -8,14 +8,35 @@ chrome.runtime.onMessage.addListener(
           Authorization: atob("QmFzaWMgTVRRNE1qY3lNRFprWkRCbE5HTTFaRGd3TmpCa016Vmxaall6WWpsbFpXTTZhekU0YmtKNU5uVmhhMHB5UjB0dlIxaENVRkoxY2paak4yNUlUMUp4TkdFelpVNTRZalZ0T0E9PQ=="),
           "Content-Type": "application/x-www-form-urlencoded"
         },
-        body: 'grant_type=authorization_code&code='+request.code
+        body: new URLSearchParams([
+          ['grant_type', 'authorization_code'],
+          ['code', request.code]
+        ])
       })
-      .then( (r) => r.json() )
       .then( (response) => {
-        sendResponse(response);
+        return response.json()
+        .then( (payload) => {
+          if (payload && payload.error == "invalid_grant") {
+            return {error: "invalid_grant"};
+          }
+          if (payload && typeof payload.error == "string") {
+            return {error: "transient"};
+          }
+          if (response.status < 200 || response.status >= 300 ||
+              !payload ||
+              typeof payload.access_token != "string" ||
+              payload.access_token.length == 0 ||
+              typeof payload.refresh_token != "string" ||
+              payload.refresh_token.length == 0) {
+            return {error: "transient"};
+          }
+          return payload;
+        })
+        .catch( () => ({error: "transient"}));
       })
-      .catch( (error) => {
-        console.log(error);
+      .catch( () => ({error: "transient"}))
+      .then( (result) => {
+        sendResponse(result);
       })
       return true;
     }
@@ -26,15 +47,35 @@ chrome.runtime.onMessage.addListener(
           Authorization: atob("QmFzaWMgTVRRNE1qY3lNRFprWkRCbE5HTTFaRGd3TmpCa016Vmxaall6WWpsbFpXTTZhekU0YmtKNU5uVmhhMHB5UjB0dlIxaENVRkoxY2paak4yNUlUMUp4TkdFelpVNTRZalZ0T0E9PQ=="),
           "Content-Type": "application/x-www-form-urlencoded"
         },
-        body: 'grant_type=refresh_token&refresh_token='+request.tokenArg
+        body: new URLSearchParams([
+          ['grant_type', 'refresh_token'],
+          ['refresh_token', request.tokenArg]
+        ])
       })
-      .then( (r) => r.json() )
       .then( (response) => {
-        sendResponse(response);
+        return response.json()
+        .then( (payload) => {
+          if (payload && payload.error == "invalid_grant") {
+            return {error: "invalid_grant"};
+          }
+          if (payload && typeof payload.error == "string") {
+            return {error: "transient"};
+          }
+          if (response.status < 200 || response.status >= 300 ||
+              !payload ||
+              typeof payload.access_token != "string" ||
+              payload.access_token.length == 0 ||
+              (Object.prototype.hasOwnProperty.call(payload, 'refresh_token') &&
+                (typeof payload.refresh_token != "string" || payload.refresh_token.length == 0))) {
+            return {error: "transient"};
+          }
+          return payload;
+        })
+        .catch( () => ({error: "transient"}));
       })
-      .catch( (error) => {
-        console.log(error);
-        sendResponse(false);
+      .catch( () => ({error: "transient"}))
+      .then( (result) => {
+        sendResponse(result);
       })
       return true;
     }

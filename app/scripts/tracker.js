@@ -2,7 +2,7 @@
 /*
  * attempts to get character information by verifying our token
  * if the token is good, the information in the topbar is set
- * if it's bad, we try to refresh the token (if refresh fails, refreshToken is set to null)
+ * if it's bad, we try to refresh the token
  */
 function GetCharacterID() {
   return Promise.resolve().then( () => {
@@ -168,10 +168,28 @@ function ChangePage(region, systemName) {
 function ExtractAuthCode(url) {
   if(url.indexOf('?code=') > -1) {
     var code = url.split('?code=')[1].split('&state')[0];
+    try {
+      code = decodeURIComponent(code);
+    }
+    catch (error) {
+      return Promise.reject({error: "transient"});
+    }
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(
         {contentScriptQuery: "postAuthCode", code: code},
         response => {
+          if (chrome.runtime.lastError) {
+            reject({error: "transient"});
+            return;
+          }
+          if (!response || response.error ||
+              typeof response.access_token != "string" ||
+              response.access_token.length == 0 ||
+              typeof response.refresh_token != "string" ||
+              response.refresh_token.length == 0) {
+            reject({error: response && response.error == "invalid_grant" ? "invalid_grant" : "transient"});
+            return;
+          }
           token = response['access_token'];
           refreshToken = response['refresh_token'];
           chrome.storage.local.set({radarToken: token});
@@ -190,18 +208,42 @@ function ExtractAuthCode(url) {
 }
 
 /*
- * This function tries to get a new token, if it fails all tokens that we have are revoked.
+ * This function tries to get a new token; invalid_grant signs out, while transient failures preserve the session.
  */
 function AttemptRefreshToken(tokenArg) {
+  var currentRefreshToken = (refreshToken == null) ? tokenArg : refreshToken;
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(
       {contentScriptQuery: "refreshToken", tokenArg: tokenArg},
       response => {
-        if (response == false) {
-          return RevokeToken();
+        if (chrome.runtime.lastError) {
+          reject({error: "transient"});
+          return;
+        }
+        if (!response) {
+          reject({error: "transient"});
+          return;
+        }
+        if (response.error == "invalid_grant") {
+          RevokeToken();
+          reject({error: "invalid_grant"});
+          return;
+        }
+        if (response.error ||
+            typeof response.access_token != "string" ||
+            response.access_token.length == 0 ||
+            (Object.prototype.hasOwnProperty.call(response, 'refresh_token') &&
+              (typeof response.refresh_token != "string" || response.refresh_token.length == 0))) {
+          reject({error: "transient"});
+          return;
         }
         token = response['access_token'];
-        refreshToken = response['refresh_token'];
+        if (Object.prototype.hasOwnProperty.call(response, 'refresh_token')) {
+          refreshToken = response['refresh_token'];
+        }
+        else {
+          refreshToken = currentRefreshToken;
+        }
         chrome.storage.local.set({radarToken: token});
         chrome.storage.local.set({radarRefreshToken: refreshToken});
         resolve();
@@ -332,5 +374,8 @@ ExtractAuthCode(location.href)
   }
 })
 .then ( () => {
+  characterHeartbeat = setInterval(FindCharacter, 1000);
+})
+.catch( () => {
   characterHeartbeat = setInterval(FindCharacter, 1000);
 });
