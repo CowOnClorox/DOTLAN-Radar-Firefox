@@ -217,16 +217,23 @@ function AttemptRefreshToken(tokenArg) {
  * We don't wait for the promises to resolve for this function
  */
 function RevokeToken() {
+  var tokenToRevoke = token;
+  var refreshTokenToRevoke = refreshToken;
+
+  token = null;
+  refreshToken = null;
+  chrome.storage.local.set({radarToken: token});
+  chrome.storage.local.set({radarRefreshToken: refreshToken});
+  SetLogoutStateTopbar();
+
   chrome.runtime.sendMessage(
-    {contentScriptQuery: "revokeToken", token: token, refreshToken: refreshToken},
-    response => {
-      token = null;
-      chrome.storage.local.set({radarToken: token});
-      refreshToken = null;
-      chrome.storage.local.set({radarRefreshToken: refreshToken});
+    {contentScriptQuery: "revokeToken", token: tokenToRevoke, refreshToken: refreshTokenToRevoke},
+    () => {
+      if (chrome.runtime.lastError) {
+        return;
+      }
     }
   );
-  SetLogoutStateTopbar();
 }
 
 /*
