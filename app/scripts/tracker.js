@@ -51,8 +51,34 @@ function GetCharacterID() {
  * If the calls fail, we try to find a new token, or refresh tokens for a new one
  */
 function FindCharacter() {
+  var initializing = false;
   return syncData()
   .then( () => {
+    if (initializationPending && !initializationInProgress && token == null && refreshToken != null) {
+      initializing = true;
+      initializationInProgress = true;
+      return AttemptRefreshToken(refreshToken)
+      .then( () => {
+        reactiveData.signInText = 'Sign Out';
+        reactiveData.signInOnClick = RevokeToken;
+        reactiveData.signInLink = 'javascript:;';
+        return GetCharacterID();
+      })
+      .then( () => {
+        if (!radarTrackingEnabled) {
+          reactiveData.notifierData = 'Not Tracking | ';
+        }
+        initializationPending = false;
+        initializationInProgress = false;
+      })
+      .catch( (error) => {
+        initializationInProgress = false;
+        throw error;
+      });
+    }
+    if (initializationInProgress) {
+      throw 'tracking stopped';
+    }
     if (refreshToken == null && characterID != null) {
       SetLogoutStateTopbar();
     }
@@ -80,12 +106,18 @@ function FindCharacter() {
     }
   })
   .then( () => {
+    if (initializing) {
+      return;
+    }
     return axios({
       method: 'get',
       url: 'https://esi.evetech.net/latest/characters/'+characterID+'/location/?language=en&token='+token
     })
   })
   .then( (response) => {
+    if (initializing) {
+      return;
+    }
     if (characterLocation == response.data['solar_system_id']) {throw 'no update';}
     characterLocation = response.data['solar_system_id'];
     return axios({
@@ -94,6 +126,9 @@ function FindCharacter() {
     })
   })
   .then( (response) => {
+    if (initializing) {
+      return;
+    }
     systemName = response.data['name'].replace(/ /gi, '_');
     return axios({
       method: 'get',
@@ -101,12 +136,18 @@ function FindCharacter() {
     })
   })
   .then( (response) => {
+    if (initializing) {
+      return;
+    }
     return axios({
       method: 'get',
       url: 'https://esi.evetech.net/latest/universe/regions/'+response.data['region_id']+'/?language=en'
     })
   })
   .then( (response) => {
+    if (initializing) {
+      return;
+    }
     region = response.data['name'].replace(/ /gi, '_');
     reactiveData.characterLocation = systemName+', '+region;
     if (location.pathname.split('#')[0] != '/map/'+region+'/'+systemName &&
@@ -119,6 +160,9 @@ function FindCharacter() {
       throw 'no update';
     }
     else if (error == 'tracking stopped'){
+      throw 'tracking stopped';
+    }
+    else if (error && (error.error == 'transient' || error.error == 'stale')) {
       throw 'tracking stopped';
     }
     console.log(error);
@@ -211,7 +255,26 @@ function ExtractAuthCode(url) {
  * This function tries to get a new token; invalid_grant signs out, while transient failures preserve the session.
  */
 function AttemptRefreshToken(tokenArg) {
+  var tokenAtRequest = token;
   var currentRefreshToken = (refreshToken == null) ? tokenArg : refreshToken;
+
+  function SessionIsCurrent(callback) {
+    if (token != tokenAtRequest || tokenArg != currentRefreshToken || refreshToken != currentRefreshToken) {
+      callback(false);
+      return;
+    }
+    chrome.storage.local.get(['radarToken', 'radarRefreshToken'], (items) => {
+      if (chrome.runtime.lastError) {
+        callback(false);
+        return;
+      }
+      var storedToken = (typeof items['radarToken'] == 'undefined') ? null : items['radarToken'];
+      var storedRefreshToken = (typeof items['radarRefreshToken'] == 'undefined') ? null : items['radarRefreshToken'];
+      callback(token == tokenAtRequest && tokenArg == currentRefreshToken && refreshToken == currentRefreshToken &&
+        storedToken == tokenAtRequest && storedRefreshToken == currentRefreshToken);
+    });
+  }
+
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(
       {contentScriptQuery: "refreshToken", tokenArg: tokenArg},
@@ -225,8 +288,14 @@ function AttemptRefreshToken(tokenArg) {
           return;
         }
         if (response.error == "invalid_grant") {
-          RevokeToken();
-          reject({error: "invalid_grant"});
+          SessionIsCurrent((isCurrent) => {
+            if (!isCurrent) {
+              reject({error: "stale"});
+              return;
+            }
+            RevokeToken();
+            reject({error: "invalid_grant"});
+          });
           return;
         }
         if (response.error ||
@@ -237,16 +306,22 @@ function AttemptRefreshToken(tokenArg) {
           reject({error: "transient"});
           return;
         }
-        token = response['access_token'];
-        if (Object.prototype.hasOwnProperty.call(response, 'refresh_token')) {
-          refreshToken = response['refresh_token'];
-        }
-        else {
-          refreshToken = currentRefreshToken;
-        }
-        chrome.storage.local.set({radarToken: token});
-        chrome.storage.local.set({radarRefreshToken: refreshToken});
-        resolve();
+        SessionIsCurrent((isCurrent) => {
+          if (!isCurrent) {
+            reject({error: "stale"});
+            return;
+          }
+          token = response['access_token'];
+          if (Object.prototype.hasOwnProperty.call(response, 'refresh_token')) {
+            refreshToken = response['refresh_token'];
+          }
+          else {
+            refreshToken = currentRefreshToken;
+          }
+          chrome.storage.local.set({radarToken: token});
+          chrome.storage.local.set({radarRefreshToken: refreshToken});
+          resolve();
+        });
       }
     );
   });
@@ -342,6 +417,8 @@ var region = null;
 var characterLocation = null;
 var characterID = null;
 var characterHeartbeat = null;
+var initializationPending = false;
+var initializationInProgress = false;
 // since the radarTrackingTrigger function wasn't defined when we rendered our HTML, we set it here instead
 reactiveData.trackingTriggerFunction = radarTrackingTrigger
 
@@ -377,5 +454,6 @@ ExtractAuthCode(location.href)
   characterHeartbeat = setInterval(FindCharacter, 1000);
 })
 .catch( () => {
+  initializationPending = true;
   characterHeartbeat = setInterval(FindCharacter, 1000);
 });

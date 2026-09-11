@@ -16,14 +16,16 @@ chrome.runtime.onMessage.addListener(
       .then( (response) => {
         return response.json()
         .then( (payload) => {
-          if (payload && payload.error == "invalid_grant") {
-            return {error: "invalid_grant"};
+          if (response.status < 200 || response.status >= 300) {
+            if (response.status == 400 && payload && payload.error == "invalid_grant") {
+              return {error: "invalid_grant"};
+            }
+            return {error: "transient"};
           }
           if (payload && typeof payload.error == "string") {
             return {error: "transient"};
           }
-          if (response.status < 200 || response.status >= 300 ||
-              !payload ||
+          if (!payload ||
               typeof payload.access_token != "string" ||
               payload.access_token.length == 0 ||
               typeof payload.refresh_token != "string" ||
@@ -55,14 +57,16 @@ chrome.runtime.onMessage.addListener(
       .then( (response) => {
         return response.json()
         .then( (payload) => {
-          if (payload && payload.error == "invalid_grant") {
-            return {error: "invalid_grant"};
+          if (response.status < 200 || response.status >= 300) {
+            if (response.status == 400 && payload && payload.error == "invalid_grant") {
+              return {error: "invalid_grant"};
+            }
+            return {error: "transient"};
           }
           if (payload && typeof payload.error == "string") {
             return {error: "transient"};
           }
-          if (response.status < 200 || response.status >= 300 ||
-              !payload ||
+          if (!payload ||
               typeof payload.access_token != "string" ||
               payload.access_token.length == 0 ||
               (Object.prototype.hasOwnProperty.call(payload, 'refresh_token') &&
