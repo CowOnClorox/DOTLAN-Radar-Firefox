@@ -34,4 +34,6 @@ If you love the program enough that you feel compelled to donate, ISK donations 
 
 ## Attributions
 
+Bundled library provenance and licence texts are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 Icon made by [Smashicons](https://www.flaticon.com/authors/smashicons) from [www.flaticon.com](https://www.flaticon.com/) is licensed by [CC 3.0 BY](http://creativecommons.org/licenses/by/3.0/ "Creative Commons BY 3.0")
