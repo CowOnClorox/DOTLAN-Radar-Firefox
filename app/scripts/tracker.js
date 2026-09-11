@@ -54,10 +54,10 @@ function FindCharacter() {
   var initializing = false;
   return syncData()
   .then( () => {
-    if (initializationPending && !initializationInProgress && token == null && refreshToken != null) {
+    if (initializationPending && !initializationInProgress && refreshToken != null) {
       initializing = true;
       initializationInProgress = true;
-      return AttemptRefreshToken(refreshToken)
+      return (token == null ? AttemptRefreshToken(refreshToken) : Promise.resolve())
       .then( () => {
         reactiveData.signInText = 'Sign Out';
         reactiveData.signInOnClick = RevokeToken;
