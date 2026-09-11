@@ -15,7 +15,7 @@ The release artifacts were downloaded from the official tagged repositories for 
 - Licence: MIT. Complete text copied from the tagged release is in [`licenses/vue-2.5.13-MIT.txt`](licenses/vue-2.5.13-MIT.txt).
 - SHA-256 of bundled file: `7ed51bb2054f2cfd8fb2b0d9abd4bc4cd37c657a77d0e287206e25bfc0b053bf`
 - SHA-256 of official `v2.5.13/dist/vue.runtime.min.js`: `028919b1be382068779c7e24e914580e7a42058cacb6708ad0590ddc8dc43652`
-- Verification: normalized to LF, the bundled and official files are byte-for-byte identical. The bundled file has 5 CRLF line endings; the official artifact has 5 LF line endings. This accounts for the 5-byte hash difference.
+- Verification: normalized to LF, the bundled and official files are byte-for-byte identical. The bundled file has 5 CRLF line endings; the official artifact has 5 LF line endings. This accounts for the 5-byte file-size difference.
 
 ## Axios 0.17.1
 
@@ -28,7 +28,7 @@ The release artifacts were downloaded from the official tagged repositories for 
 - Licence: MIT. Complete text copied from the tagged release is in [`licenses/axios-0.17.1-MIT.txt`](licenses/axios-0.17.1-MIT.txt).
 - SHA-256 of bundled file: `d9ca2f407cd7a61c3a4b75d17d544bbc38cdb2fed490d0c6351f45cfe6db4017`
 - SHA-256 of official `v0.17.1/dist/axios.min.js`: `03cdc51eddb62db48e3d837d746b3be21fc9d23a9cdd365aa4752995fdaeba92`
-- Verification: normalized to LF, the bundled and official files are byte-for-byte identical. The bundled file has 8 CRLF line endings; the official artifact has 8 LF line endings. This accounts for the 8-byte hash difference.
+- Verification: normalized to LF, the bundled and official files are byte-for-byte identical. The bundled file has 8 CRLF line endings; the official artifact has 8 LF line endings. This accounts for the 8-byte file-size difference.
 
 ## Icon attribution
 
