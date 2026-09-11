@@ -11,7 +11,8 @@ function addWaypoint(location, asDestination) {
   .then( (response) => {
     return axios({
       method: 'post',
-      url: 'https://esi.evetech.net/latest/ui/autopilot/waypoint/?language=en&add_to_beginning=false&clear_other_waypoints='+asDestination+'&destination_id='+response.data['systems'][0]['id']+'&token='+token
+      url: 'https://esi.evetech.net/latest/ui/autopilot/waypoint/?language=en&add_to_beginning=false&clear_other_waypoints='+asDestination+'&destination_id='+response.data['systems'][0]['id'],
+      headers: {Authorization: 'Bearer '+token}
     })
   })
   .then( () => {
@@ -35,11 +36,11 @@ function addWaypoint(location, asDestination) {
         }
       }
       var hash = window.location.hash;
-      window.location.assign('http://evemaps.dotlan.net/map/'+region+'/'+systemName+waypointString+'?tracking'+hash);
+      window.location.assign('https://evemaps.dotlan.net/map/'+region+'/'+systemName+waypointString+'?tracking'+hash);
     }
   })
   .catch( (error) => {
-    console.log(error);
+    console.log('Waypoint request failed');
   })
 }
 
@@ -56,7 +57,7 @@ function removeWaypoint(location) {
     }
   }
   var hash = window.location.hash;
-  window.location.assign('http://evemaps.dotlan.net/map/'+region+'/'+systemName+waypointString+'?tracking'+hash);
+  window.location.assign('https://evemaps.dotlan.net/map/'+region+'/'+systemName+waypointString+'?tracking'+hash);
 }
 
 /*

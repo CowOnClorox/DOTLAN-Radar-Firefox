@@ -27,7 +27,7 @@ function GetCharacterID() {
     reactiveData.characterPortrait = 'https://image.eveonline.com/Character/'+characterID+'_32.jpg';
   })
   .catch( (error) => {
-    console.log(error);
+    console.log('Unable to read character token');
     return localGet_Promise('radarRefreshToken')
     .then( (items) => {
       refreshToken = (typeof items['radarRefreshToken'] == 'undefined') ? null : items['radarRefreshToken'];
@@ -111,7 +111,8 @@ function FindCharacter() {
     }
     return axios({
       method: 'get',
-      url: 'https://esi.evetech.net/latest/characters/'+characterID+'/location/?language=en&token='+token
+      url: 'https://esi.evetech.net/latest/characters/'+characterID+'/location/?language=en',
+      headers: {Authorization: 'Bearer '+token}
     })
   })
   .then( (response) => {
@@ -165,7 +166,7 @@ function FindCharacter() {
     else if (error && (error.error == 'transient' || error.error == 'stale')) {
       throw 'tracking stopped';
     }
-    console.log(error);
+    console.log('Character tracking request failed');
     return localGet_Promise('radarToken')
     .then( (items) => {
       if (token != items['radarToken']) {
@@ -188,7 +189,7 @@ function FindCharacter() {
     if (error == 'no update' || error == 'new token found' || error == 'tracking stopped'){
       return Promise.resolve();
     }
-    console.log(error);
+    console.log('Character tracking stopped');
   });
 }
 
@@ -203,7 +204,7 @@ function ChangePage(region, systemName) {
   for (; i < waypointArray.length; i++) {
     waypointString += ':' + waypointArray[i];
   }
-  location.href = 'http://evemaps.dotlan.net/map/'+region+'/'+systemName+waypointString+'?tracking'+hash;
+  location.href = 'https://evemaps.dotlan.net/map/'+region+'/'+systemName+waypointString+'?tracking'+hash;
 }
 
 /*
