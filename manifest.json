@@ -18,7 +18,15 @@
   }],
   
   "background": {
+    "scripts": ["app/scripts/background_api.js"],
     "service_worker": "app/scripts/background_api.js"
+  },
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{15b87d6b-847f-46a9-aaf0-012b28623003}",
+      "strict_min_version": "140.0"
+    }
   },
   
   "content_scripts": [

@@ -4,6 +4,26 @@ This is an extension for Chrome to re-add the old 'radar' (location tracking) fe
 
 [Download it here](https://chrome.google.com/webstore/detail/dotlan-esi-radar/gjdlibhgddgmjfapeiflcbjeobefnjnh)
 
+## Firefox development
+
+This is an incomplete Firefox development port. AMO data declarations, privacy corrections, and OAuth review are pending. `data_collection_permissions` is intentionally absent from `manifest.json` until those declarations are reviewed; this port is not ready for AMO submission.
+
+To install it temporarily in Firefox desktop:
+
+1. Open `about:debugging#/runtime/this-firefox`.
+2. Select **Load Temporary Add-on**.
+3. Select this project's `manifest.json`.
+
+After editing the extension, select **Reload** for the temporary add-on so manifest, background, and content-script changes take effect. Temporary installations are for development only: they are removed when Firefox restarts or when you remove them, and they do not fully reproduce the behavior of a signed AMO add-on or its installation-time prompts.
+
+Initial smoke checklist:
+
+- The add-on appears in **This Firefox** without a manifest error and its background listener registers.
+- A DOTLAN map shows exactly one radar topbar with its icon.
+- An unrelated site shows no radar UI.
+- The relevant extension, background, and page consoles have no new errors.
+- Do not authenticate while performing this initial check.
+
 ## Problems?  Feedback?
 
 If you encounter any bugs or you think there are missing features please let me know [on the issues page](https://github.com/ArtificialQualia/DOTLAN-Radar-Chrome-Extension/issues).
