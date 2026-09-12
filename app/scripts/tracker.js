@@ -496,16 +496,12 @@ function RevokeToken() {
       () => {
         var lastError = chrome.runtime.lastError;
         if (lastError) {
-          ClearCredentials_Promise(credentialsToClear)
-          .catch( () => {});
           return;
         }
       }
     );
   }
   catch (error) {
-    ClearCredentials_Promise(credentialsToClear)
-    .catch( () => {});
     return;
   }
 }
@@ -522,8 +518,6 @@ function SetLogoutStateTopbar(credentialsToClear, clearSharedCredentials) {
   SetSignedOutStateTopbar();
   if (clearSharedCredentials !== false) {
     ClearStoredCredentialsIfCurrent(expectedCredentials);
-    ClearCredentials_Promise(expectedCredentials)
-    .catch( () => {});
   }
 }
 
@@ -579,33 +573,7 @@ function ClearStoredCredentialsIfCurrent(credentials) {
   }
   return PersistCredentialInvalidation(credentials)
     .then(function() {
-      return localGet_Promise(['radarToken', 'radarRefreshToken', 'radarClientId']);
-    })
-    .then(function(items) {
-      var current = {
-        token: (typeof items.radarToken == 'undefined') ? null : items.radarToken,
-        refreshToken: (typeof items.radarRefreshToken == 'undefined') ? null : items.radarRefreshToken,
-        clientId: (typeof items.radarClientId == 'undefined') ? null : items.radarClientId
-      };
-      if (current.token != credentials.token || current.refreshToken != credentials.refreshToken ||
-          current.clientId != credentials.clientId) {
-        return;
-      }
-      return new Promise(function(resolve) {
-        try {
-          chrome.storage.local.set({radarToken: null, radarRefreshToken: null, radarClientId: null}, function() {
-            var lastError = chrome.runtime.lastError;
-            if (lastError) {
-              resolve();
-              return;
-            }
-            resolve();
-          });
-        }
-        catch (error) {
-          resolve();
-        }
-      });
+      return ClearCredentials_Promise(credentials);
     })
     .catch( () => {});
 }
