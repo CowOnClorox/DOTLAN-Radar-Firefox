@@ -6,11 +6,23 @@ This is an extension for Chrome to re-add the old 'radar' (location tracking) fe
 
 ## Firefox development
 
-This is an incomplete Firefox development port. AMO data declarations, privacy corrections, and OAuth review are pending. `data_collection_permissions` is intentionally absent from `manifest.json` until those declarations are reviewed; this port is not ready for AMO submission.
+This is an incomplete Firefox development port. The manifest now declares the
+data sent to EVE/ESI and DOTLAN for the feature, but AMO review and approval
+are still pending. See [PRIVACY_POLICY.md](PRIVACY_POLICY.md) and
+[AMO_REVIEW_NOTES.md](AMO_REVIEW_NOTES.md) for the current scope and data-flow
+description.
 
-Authentication uses Firefox Identity Authorization Code with PKCE and the registered public client; no client secret is bundled. Public-client server revocation is best-effort and remains unverified against EVE's confidential-client guidance. JWT validation runs in the background; live authentication and Firefox smoke checks remain pending.
+Authentication uses Firefox Identity Authorization Code with PKCE and the
+registered public client; no client secret is bundled. Public-client server
+revocation is best-effort and remains unverified against EVE's confidential-
+client guidance. JWT validation runs in the background.
 
 The background owns the refresh token, verification, and credential storage. DOTLAN pages receive only a verified, unexpired access-token session for tracking and waypoints; if the background is unavailable, authenticated actions pause and the UI offers **Retry**. Sign-out is reported complete only after local credential clearing succeeds. Older development credentials may require a fresh sign-in.
+
+After sign-out, any remaining highlight is only the map selection; active
+tracking has stopped. Adding a waypoint sends it to EVE through ESI. Removing
+a waypoint from DOTLAN changes only the DOTLAN map and does not remove it from
+the EVE client.
 
 To install it temporarily in Firefox desktop:
 
@@ -25,14 +37,23 @@ Initial smoke checklist:
 - The add-on appears in **This Firefox** without a manifest error and its background listener registers.
 - A DOTLAN map shows exactly one radar topbar with its icon.
 - An unrelated site shows no radar UI.
-- The relevant extension, background, and page consoles have no new errors.
-- Do not authenticate while performing this initial check.
 
-## Problems?  Feedback?
+### User-reported Firefox smoke passes
 
-If you encounter any bugs or you think there are missing features please let me know [on the issues page](https://github.com/ArtificialQualia/DOTLAN-Radar-Chrome-Extension/issues).
+The following five checks were reported as passing on 2026-09-13:
 
-If you wish to contribute to the project codebase, I will be accepting pull requests.
+- Temporary loading and reloading in Firefox desktop.
+- One radar bar on DOTLAN and no radar UI on unrelated sites.
+- Live sign-in, the correct character and location, tracking between systems, and pause/resume.
+- Adding a waypoint through DOTLAN and seeing it in the same character's in-game route.
+- Signing out and reloading the page leaves the user signed out; tracking no longer follows them.
+
+Console inspection, background restart/lifecycle testing, signed installation,
+and AMO approval were not covered by those smoke checks and remain pending.
+
+## Upstream project
+
+The original project's issue tracker is available [on GitHub](https://github.com/ArtificialQualia/DOTLAN-Radar-Chrome-Extension/issues), and its repository accepts pull requests. This Firefox port does not yet publish a separate maintainer or publication contact.
 
 If you love the program enough that you feel compelled to donate, ISK donations are welcome to my eve character: **Demogorgon Asmodeous**
 
