@@ -149,6 +149,92 @@ function StoredCredentialsEmpty(credentials) {
   return credentials.token == null && credentials.refreshToken == null && credentials.clientId == null;
 }
 
+function CredentialsHaveValue(credentials) {
+  return credentials && (credentials.token != null || credentials.refreshToken != null ||
+    credentials.clientId != null);
+}
+
+function CredentialMarkerKey(credentials) {
+  var value = [credentials.token || '', credentials.refreshToken || '', credentials.clientId || ''].join('\u0000');
+  var firstHash = 2166136261;
+  var secondHash = 2246822519;
+  var thirdHash = 3266489917;
+  var fourthHash = 668265263;
+  for (var i = 0; i < value.length; i++) {
+    var code = value.charCodeAt(i);
+    firstHash = Math.imul(firstHash ^ code, 16777619);
+    secondHash = Math.imul(secondHash ^ code, 2246822519);
+    thirdHash = Math.imul(thirdHash ^ code, 3266489917);
+    fourthHash = Math.imul(fourthHash ^ code, 668265263);
+  }
+  return 'radarInvalidatedSession_' + (firstHash >>> 0).toString(16) +
+    (secondHash >>> 0).toString(16) + (thirdHash >>> 0).toString(16) +
+    (fourthHash >>> 0).toString(16);
+}
+
+function CredentialInvalidationExists(credentials) {
+  if (!CredentialsHaveValue(credentials)) {
+    return Promise.resolve(false);
+  }
+  return new Promise(function(resolve, reject) {
+    try {
+      chrome.storage.local.get(CredentialMarkerKey(credentials), function(items) {
+        var lastError = chrome.runtime.lastError;
+        if (lastError) {
+          reject({error: 'transient'});
+          return;
+        }
+        resolve(items && items[CredentialMarkerKey(credentials)] === true);
+      });
+    }
+    catch (error) {
+      reject({error: 'transient'});
+    }
+  });
+}
+
+function SetCredentialInvalidation(credentials, value) {
+  if (!CredentialsHaveValue(credentials)) {
+    return;
+  }
+  var values = {};
+  values[CredentialMarkerKey(credentials)] = value;
+  try {
+    chrome.storage.local.set(values, function() {
+      var lastError = chrome.runtime.lastError;
+      if (lastError) {
+        return;
+      }
+    });
+  }
+  catch (error) {
+    return;
+  }
+}
+
+function ClearCredentialInvalidation(credentials) {
+  if (!CredentialsHaveValue(credentials)) {
+    return Promise.resolve();
+  }
+  return new Promise(function(resolve, reject) {
+    var values = {};
+    values[CredentialMarkerKey(credentials)] = null;
+    try {
+      chrome.storage.local.set(values, function() {
+        var lastError = chrome.runtime.lastError;
+        if (lastError) {
+          reject({error: 'transient'});
+          return;
+        }
+        resolve();
+      });
+    }
+    catch (error) {
+      reject({error: 'transient'});
+    }
+  });
+}
+
 function EnqueueCredentialMutation(operation, kind, expected) {
   var operationGeneration = credentialMutationGeneration;
   var pendingMutation = {kind: kind, expected: expected};
@@ -180,9 +266,24 @@ function QueueCredentialWrite(credentials, expected, allowCleared) {
         if (!StoredCredentialsMatch(current, expected) && !(allowCleared && StoredCredentialsEmpty(current))) {
           return {error: 'stale'};
         }
-        return WriteStoredCredentials(credentials)
-          .then(function() {
-            return operationGeneration == credentialMutationGeneration ? {} : {error: 'stale'};
+        return CredentialInvalidationExists(expected)
+          .then(function(invalidated) {
+            if (invalidated) {
+              return {error: 'stale'};
+            }
+            return WriteStoredCredentials(credentials)
+              .then(function() {
+                return CredentialInvalidationExists(expected)
+                  .then(function(invalidatedAfterWrite) {
+                    if (invalidatedAfterWrite || operationGeneration != credentialMutationGeneration) {
+                      return WriteStoredCredentials({token: null, refreshToken: null, clientId: null})
+                        .then(function() {
+                          return {error: 'stale'};
+                        });
+                    }
+                    return operationGeneration == credentialMutationGeneration ? {} : {error: 'stale'};
+                  });
+              });
           });
       });
   }, 'write', expected);
@@ -401,7 +502,37 @@ function StartAuth(sendResponse) {
       respond({error: 'stale'});
       return;
     }
-    RunAuthAttempt(attempt, respond);
+    var initialCredentials = {
+      token: attempt.initialToken,
+      refreshToken: attempt.initialRefreshToken,
+      clientId: attempt.initialClientId
+    };
+    CredentialInvalidationExists(initialCredentials)
+      .then(function(invalidated) {
+        if (activeAuthAttempt !== attempt) {
+          throw {error: 'stale'};
+        }
+        if (!invalidated) {
+          return null;
+        }
+        return QueueCredentialClear(initialCredentials, false)
+          .then(function(result) {
+            if (result && result.error == 'transient') {
+              throw result;
+            }
+            return ClearCredentialInvalidation(initialCredentials);
+          });
+      })
+      .then(function() {
+        if (activeAuthAttempt !== attempt) {
+          throw {error: 'stale'};
+        }
+        RunAuthAttempt(attempt, respond);
+      })
+      .catch(function(error) {
+        FinishAuthAttempt(attempt);
+        respond(error && error.error ? error : {error: 'transient'});
+      });
   });
   return true;
 }
@@ -458,10 +589,16 @@ chrome.runtime.onMessage.addListener(
         refreshToken: request.refreshToken,
         clientId: (typeof request.clientId == 'undefined') ? ESI_CLIENT_ID : request.clientId
       };
+      var ownsActiveAuthAttempt = ActiveAuthAttemptMatches(revokeCredentials);
       var forceCredentialClear = PendingCredentialWriteMatches(revokeCredentials) ||
-        ActiveAuthAttemptMatches(revokeCredentials);
-      activeAuthAttempt = null;
-      credentialMutationGeneration += 1;
+        ownsActiveAuthAttempt;
+      if (ownsActiveAuthAttempt) {
+        activeAuthAttempt = null;
+      }
+      if (forceCredentialClear) {
+        credentialMutationGeneration += 1;
+      }
+      SetCredentialInvalidation(revokeCredentials, true);
       var respond = RespondOnce(sendResponse);
       var clearCredentials = QueueCredentialClear(revokeCredentials, forceCredentialClear);
       var revoke = function(tokenToRevoke, tokenTypeHint) {

@@ -521,9 +521,104 @@ function SetLogoutStateTopbar(credentialsToClear, clearSharedCredentials) {
   };
   SetSignedOutStateTopbar();
   if (clearSharedCredentials !== false) {
+    ClearStoredCredentialsIfCurrent(expectedCredentials);
     ClearCredentials_Promise(expectedCredentials)
     .catch( () => {});
   }
+}
+
+function CredentialsHaveValue(credentials) {
+  return credentials && (credentials.token != null || credentials.refreshToken != null ||
+    credentials.clientId != null);
+}
+
+function CredentialMarkerKey(credentials) {
+  var value = [credentials.token || '', credentials.refreshToken || '', credentials.clientId || ''].join('\u0000');
+  var firstHash = 2166136261;
+  var secondHash = 2246822519;
+  var thirdHash = 3266489917;
+  var fourthHash = 668265263;
+  for (var i = 0; i < value.length; i++) {
+    var code = value.charCodeAt(i);
+    firstHash = Math.imul(firstHash ^ code, 16777619);
+    secondHash = Math.imul(secondHash ^ code, 2246822519);
+    thirdHash = Math.imul(thirdHash ^ code, 3266489917);
+    fourthHash = Math.imul(fourthHash ^ code, 668265263);
+  }
+  return 'radarInvalidatedSession_' + (firstHash >>> 0).toString(16) +
+    (secondHash >>> 0).toString(16) + (thirdHash >>> 0).toString(16) +
+    (fourthHash >>> 0).toString(16);
+}
+
+function PersistCredentialInvalidation(credentials) {
+  if (!CredentialsHaveValue(credentials)) {
+    return Promise.resolve();
+  }
+  return new Promise(function(resolve) {
+    var values = {};
+    values[CredentialMarkerKey(credentials)] = true;
+    try {
+      chrome.storage.local.set(values, function() {
+        var lastError = chrome.runtime.lastError;
+        if (lastError) {
+          resolve();
+          return;
+        }
+        resolve();
+      });
+    }
+    catch (error) {
+      resolve();
+    }
+  });
+}
+
+function ClearStoredCredentialsIfCurrent(credentials) {
+  if (!CredentialsHaveValue(credentials)) {
+    return Promise.resolve();
+  }
+  return PersistCredentialInvalidation(credentials)
+    .then(function() {
+      return localGet_Promise(['radarToken', 'radarRefreshToken', 'radarClientId']);
+    })
+    .then(function(items) {
+      var current = {
+        token: (typeof items.radarToken == 'undefined') ? null : items.radarToken,
+        refreshToken: (typeof items.radarRefreshToken == 'undefined') ? null : items.radarRefreshToken,
+        clientId: (typeof items.radarClientId == 'undefined') ? null : items.radarClientId
+      };
+      if (current.token != credentials.token || current.refreshToken != credentials.refreshToken ||
+          current.clientId != credentials.clientId) {
+        return;
+      }
+      return new Promise(function(resolve) {
+        try {
+          chrome.storage.local.set({radarToken: null, radarRefreshToken: null, radarClientId: null}, function() {
+            var lastError = chrome.runtime.lastError;
+            if (lastError) {
+              resolve();
+              return;
+            }
+            resolve();
+          });
+        }
+        catch (error) {
+          resolve();
+        }
+      });
+    })
+    .catch( () => {});
+}
+
+function CredentialInvalidationExists(credentials) {
+  if (!CredentialsHaveValue(credentials)) {
+    return Promise.resolve(false);
+  }
+  var markerKey = CredentialMarkerKey(credentials);
+  return localGet_Promise(markerKey)
+    .then(function(items) {
+      return items[markerKey] === true;
+    });
 }
 
 /*
@@ -559,22 +654,35 @@ function syncData() {
     var storedToken = (typeof items['radarToken'] == 'undefined') ? null : items['radarToken'];
     var storedRefreshToken = (typeof items['radarRefreshToken'] == 'undefined') ? null : items['radarRefreshToken'];
     var storedClientId = (typeof items['radarClientId'] == 'undefined') ? null : items['radarClientId'];
-    if ((storedToken != null || storedRefreshToken != null) && storedClientId != ESI_CLIENT_ID) {
-      token = null;
-      refreshToken = null;
-      credentialClientId = null;
-      return ClearCredentials_Promise({
-        token: storedToken,
-        refreshToken: storedRefreshToken,
-        clientId: storedClientId
-      });
-    }
-    token = storedToken;
-    refreshToken = storedRefreshToken;
-    credentialClientId = storedClientId;
-    if (token == null && refreshToken != null && credentialClientId == ESI_CLIENT_ID) {
-      initializationPending = true;
-    }
+    var storedCredentials = {
+      token: storedToken,
+      refreshToken: storedRefreshToken,
+      clientId: storedClientId
+    };
+    return CredentialInvalidationExists(storedCredentials)
+    .then(function(invalidated) {
+      if (syncGeneration != loginAttemptGeneration) {
+        throw {error: 'stale'};
+      }
+      if (invalidated) {
+        token = null;
+        refreshToken = null;
+        credentialClientId = null;
+        return ClearStoredCredentialsIfCurrent(storedCredentials);
+      }
+      if ((storedToken != null || storedRefreshToken != null) && storedClientId != ESI_CLIENT_ID) {
+        token = null;
+        refreshToken = null;
+        credentialClientId = null;
+        return ClearCredentials_Promise(storedCredentials);
+      }
+      token = storedToken;
+      refreshToken = storedRefreshToken;
+      credentialClientId = storedClientId;
+      if (token == null && refreshToken != null && credentialClientId == ESI_CLIENT_ID) {
+        initializationPending = true;
+      }
+    });
   })
 }
 
