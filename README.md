@@ -8,6 +8,8 @@ This is an extension for Chrome to re-add the old 'radar' (location tracking) fe
 
 This is an incomplete Firefox development port. AMO data declarations, privacy corrections, and OAuth review are pending. `data_collection_permissions` is intentionally absent from `manifest.json` until those declarations are reviewed; this port is not ready for AMO submission.
 
+Authentication uses Firefox Identity Authorization Code with PKCE and the registered public client; no client secret is bundled. Local sign-out is independent; public-client server revocation is best-effort and remains unverified against EVE's confidential-client guidance. JWT validation and live authentication are pending.
+
 To install it temporarily in Firefox desktop:
 
 1. Open `about:debugging#/runtime/this-firefox`.

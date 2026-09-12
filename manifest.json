@@ -44,7 +44,8 @@
   ],
   
   "permissions" : [
-    "storage"
+    "storage",
+    "identity"
   ],
 
   "host_permissions": [

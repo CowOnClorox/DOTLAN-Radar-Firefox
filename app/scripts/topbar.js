@@ -1,12 +1,3 @@
-// values that are sent with the request to the CCP login server
-var ESI_response_type="response_type=code"
-var ESI_redirect_uri="redirect_uri=http%3A%2F%2Fevemaps.dotlan.net%2F%23"
-var ESI_client_id="client_id=14827206dd0e4c5d8060d35ef63b9eec"
-var ESI_scope="scope=esi-location.read_location.v1%20esi-ui.write_waypoint.v1"
-var ESI_state="state=dotlanradar"
-var ESI_query_string="?"+ESI_response_type+"&"+ESI_redirect_uri+"&"+ESI_client_id+"&"+ESI_scope+"&"+ESI_state
-var ESI_login_url="https://login.eveonline.com/v2/oauth/authorize"
-
 // Vue data that, when modified, re-renders the content
 var reactiveData = {
     topbarContainerAnimation: 'slideIn 1s ease-out 0.5s 1 forwards',
@@ -19,7 +10,7 @@ var reactiveData = {
     notifierDisplay: 'none',
     notifierData: '',
     signInText: 'Sign in',
-    signInLink: ESI_login_url+ESI_query_string,
+    signInLink: 'javascript:;',
     signInOnClick: '',
     trackingTriggerText: 'Stop Tracking',
     trackingTriggerFunction: ''

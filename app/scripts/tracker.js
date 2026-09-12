@@ -1,4 +1,52 @@
 
+var ESI_CLIENT_ID = 'f7b4d46e9ec2494481e8a40fd860540a';
+
+function StartLogin(event) {
+  if (event && event.preventDefault) {
+    event.preventDefault();
+  }
+  if (loginInProgress) {
+    return false;
+  }
+  loginInProgress = true;
+  reactiveData.signInText = 'Signing in...';
+  try {
+    chrome.runtime.sendMessage(
+      {contentScriptQuery: 'startAuth'},
+      response => {
+        var lastError = chrome.runtime.lastError;
+        loginInProgress = false;
+        if (lastError || !response || response.error) {
+          console.log('Authentication flow failed');
+          SetLogoutStateTopbar();
+          return;
+        }
+        syncData()
+        .then( () => {
+          if (token == null || refreshToken == null || credentialClientId != ESI_CLIENT_ID) {
+            throw {error: 'transient'};
+          }
+          radarTrackingEnabled = true;
+          initializationPending = true;
+          reactiveData.signInText = 'Sign Out';
+          reactiveData.signInOnClick = RevokeToken;
+          reactiveData.signInLink = 'javascript:;';
+        })
+        .catch( () => {
+          console.log('Authentication setup failed');
+          SetLogoutStateTopbar();
+        });
+      }
+    );
+  }
+  catch (error) {
+    loginInProgress = false;
+    console.log('Authentication flow failed');
+    SetLogoutStateTopbar();
+  }
+  return false;
+}
+
 /*
  * attempts to get character information by verifying our token
  * if the token is good, the information in the topbar is set
@@ -28,9 +76,10 @@ function GetCharacterID() {
   })
   .catch( (error) => {
     console.log('Unable to read character token');
-    return localGet_Promise('radarRefreshToken')
+    return localGet_Promise(['radarRefreshToken', 'radarClientId'])
     .then( (items) => {
       refreshToken = (typeof items['radarRefreshToken'] == 'undefined') ? null : items['radarRefreshToken'];
+      credentialClientId = (typeof items['radarClientId'] == 'undefined') ? null : items['radarClientId'];
       if (refreshToken != null) {
         return AttemptRefreshToken(refreshToken)
         .then( () => {
@@ -73,6 +122,9 @@ function FindCharacter() {
       })
       .catch( (error) => {
         initializationInProgress = false;
+        if (error && error.error == 'transient') {
+          initializationPending = true;
+        }
         throw error;
       });
     }
@@ -164,6 +216,9 @@ function FindCharacter() {
       throw 'tracking stopped';
     }
     else if (error && (error.error == 'transient' || error.error == 'stale')) {
+      if (refreshToken != null) {
+        initializationPending = true;
+      }
       throw 'tracking stopped';
     }
     console.log('Character tracking request failed');
@@ -171,12 +226,17 @@ function FindCharacter() {
     .then( (items) => {
       if (token != items['radarToken']) {
         token = (typeof items['radarToken'] == 'undefined') ? null : items['radarToken'];
-        chrome.storage.local.get('radarRefreshToken', (items) => {refreshToken = items['radarRefreshToken'];});
-        throw 'new token found';
+        return localGet_Promise(['radarRefreshToken', 'radarClientId'])
+        .then( (items) => {
+          refreshToken = (typeof items['radarRefreshToken'] == 'undefined') ? null : items['radarRefreshToken'];
+          credentialClientId = (typeof items['radarClientId'] == 'undefined') ? null : items['radarClientId'];
+          throw 'new token found';
+        });
       }
-      return localGet_Promise('radarRefreshToken')
+      return localGet_Promise(['radarRefreshToken', 'radarClientId'])
       .then( (items) => {
         refreshToken = (typeof items['radarRefreshToken'] == 'undefined') ? null : items['radarRefreshToken'];
+        credentialClientId = (typeof items['radarClientId'] == 'undefined') ? null : items['radarClientId'];
         if (refreshToken == null) {
           SetLogoutStateTopbar();
           throw 'refreshToken gone, setting logged out state';
@@ -208,45 +268,12 @@ function ChangePage(region, systemName) {
 }
 
 /*
- * This tries to extract the auth code from the URL, this only happens when we get a redirect from the login server
+ * Tracking is controlled by the normal DOTLAN query string. Authentication
+ * callbacks are handled by the Firefox identity flow, not by page URLs.
  */
-function ExtractAuthCode(url) {
-  if(url.indexOf('?code=') > -1) {
-    var code = url.split('?code=')[1].split('&state')[0];
-    try {
-      code = decodeURIComponent(code);
-    }
-    catch (error) {
-      return Promise.reject({error: "transient"});
-    }
-    return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(
-        {contentScriptQuery: "postAuthCode", code: code},
-        response => {
-          if (chrome.runtime.lastError) {
-            reject({error: "transient"});
-            return;
-          }
-          if (!response || response.error ||
-              typeof response.access_token != "string" ||
-              response.access_token.length == 0 ||
-              typeof response.refresh_token != "string" ||
-              response.refresh_token.length == 0) {
-            reject({error: response && response.error == "invalid_grant" ? "invalid_grant" : "transient"});
-            return;
-          }
-          token = response['access_token'];
-          refreshToken = response['refresh_token'];
-          chrome.storage.local.set({radarToken: token});
-          chrome.storage.local.set({radarRefreshToken: refreshToken});
-          radarTrackingEnabled = true;
-          window.location.hash = '';
-          resolve();
-        }
-      );
-    });
-  }
-  else if (url.indexOf('?tracking') > -1) {
+function InitializeTrackingFromLocation() {
+  var queryParameters = new URLSearchParams(window.location.search);
+  if (queryParameters.has('tracking')) {
     radarTrackingEnabled = true;
   }
   return Promise.resolve();
@@ -258,21 +285,28 @@ function ExtractAuthCode(url) {
 function AttemptRefreshToken(tokenArg) {
   var tokenAtRequest = token;
   var currentRefreshToken = (refreshToken == null) ? tokenArg : refreshToken;
+  var clientIdAtRequest = credentialClientId;
 
   function SessionIsCurrent(callback) {
-    if (token != tokenAtRequest || tokenArg != currentRefreshToken || refreshToken != currentRefreshToken) {
+    if (token != tokenAtRequest || tokenArg != currentRefreshToken ||
+        refreshToken != currentRefreshToken || credentialClientId != clientIdAtRequest ||
+        clientIdAtRequest != ESI_CLIENT_ID) {
       callback(false);
       return;
     }
-    chrome.storage.local.get(['radarToken', 'radarRefreshToken'], (items) => {
-      if (chrome.runtime.lastError) {
+    chrome.storage.local.get(['radarToken', 'radarRefreshToken', 'radarClientId'], (items) => {
+      var lastError = chrome.runtime.lastError;
+      if (lastError) {
         callback(false);
         return;
       }
+      items = items || {};
       var storedToken = (typeof items['radarToken'] == 'undefined') ? null : items['radarToken'];
       var storedRefreshToken = (typeof items['radarRefreshToken'] == 'undefined') ? null : items['radarRefreshToken'];
+      var storedClientId = (typeof items['radarClientId'] == 'undefined') ? null : items['radarClientId'];
       callback(token == tokenAtRequest && tokenArg == currentRefreshToken && refreshToken == currentRefreshToken &&
-        storedToken == tokenAtRequest && storedRefreshToken == currentRefreshToken);
+        credentialClientId == clientIdAtRequest && storedToken == tokenAtRequest &&
+        storedRefreshToken == currentRefreshToken && storedClientId == ESI_CLIENT_ID);
     });
   }
 
@@ -280,7 +314,8 @@ function AttemptRefreshToken(tokenArg) {
     chrome.runtime.sendMessage(
       {contentScriptQuery: "refreshToken", tokenArg: tokenArg},
       response => {
-        if (chrome.runtime.lastError) {
+        var lastError = chrome.runtime.lastError;
+        if (lastError) {
           reject({error: "transient"});
           return;
         }
@@ -312,16 +347,30 @@ function AttemptRefreshToken(tokenArg) {
             reject({error: "stale"});
             return;
           }
-          token = response['access_token'];
+          var newToken = response['access_token'];
+          var newRefreshToken = currentRefreshToken;
           if (Object.prototype.hasOwnProperty.call(response, 'refresh_token')) {
-            refreshToken = response['refresh_token'];
+            newRefreshToken = response['refresh_token'];
           }
-          else {
-            refreshToken = currentRefreshToken;
-          }
-          chrome.storage.local.set({radarToken: token});
-          chrome.storage.local.set({radarRefreshToken: refreshToken});
-          resolve();
+          localSet_Promise({
+            radarToken: newToken,
+            radarRefreshToken: newRefreshToken,
+            radarClientId: ESI_CLIENT_ID
+          })
+          .then( () => {
+            if (token != tokenAtRequest || refreshToken != currentRefreshToken ||
+                credentialClientId != clientIdAtRequest) {
+              reject({error: "stale"});
+              return;
+            }
+            token = newToken;
+            refreshToken = newRefreshToken;
+            credentialClientId = ESI_CLIENT_ID;
+            resolve();
+          })
+          .catch( (error) => {
+            reject({error: "transient"});
+          });
         });
       }
     );
@@ -340,18 +389,23 @@ function RevokeToken() {
 
   token = null;
   refreshToken = null;
-  chrome.storage.local.set({radarToken: token});
-  chrome.storage.local.set({radarRefreshToken: refreshToken});
+  credentialClientId = null;
   SetLogoutStateTopbar();
 
-  chrome.runtime.sendMessage(
-    {contentScriptQuery: "revokeToken", token: tokenToRevoke, refreshToken: refreshTokenToRevoke},
-    () => {
-      if (chrome.runtime.lastError) {
-        return;
+  try {
+    chrome.runtime.sendMessage(
+      {contentScriptQuery: "revokeToken", token: tokenToRevoke, refreshToken: refreshTokenToRevoke},
+      () => {
+        var lastError = chrome.runtime.lastError;
+        if (lastError) {
+          return;
+        }
       }
-    }
-  );
+    );
+  }
+  catch (error) {
+    return;
+  }
 }
 
 /*
@@ -359,8 +413,8 @@ function RevokeToken() {
  */
 function SetLogoutStateTopbar() {
   reactiveData.signInText = 'Sign in';
-  reactiveData.signInLink = ESI_login_url+ESI_query_string;
-  reactiveData.signInOnClick = '';
+  reactiveData.signInLink = 'javascript:;';
+  reactiveData.signInOnClick = StartLogin;
   reactiveData.signInRole = '';
   reactiveData.characterName = 'No character logged in';
   reactiveData.charLocationDisplay = 'none';
@@ -373,7 +427,14 @@ function SetLogoutStateTopbar() {
   }
   characterID = null;
   token = null;
-  chrome.storage.local.set({radarToken: token});
+  refreshToken = null;
+  credentialClientId = null;
+  localSet_Promise({
+    radarToken: null,
+    radarRefreshToken: null,
+    radarClientId: null
+  })
+  .catch( () => {});
 }
 
 /*
@@ -400,18 +461,34 @@ function radarTrackingTrigger() {
  * helper function to get the data we have stored in chrome.storage.local for working across tabs and on new pages
  */
 function syncData() {
-  return localGet_Promise('radarToken')
+  return localGet_Promise(['radarToken', 'radarRefreshToken', 'radarClientId'])
   .then( (items) => {
-    token = (typeof items['radarToken'] == 'undefined') ? null : items['radarToken'];
-    return localGet_Promise('radarRefreshToken');
-  })
-  .then( (items) => {
-    refreshToken = (typeof items['radarRefreshToken'] == 'undefined') ? null : items['radarRefreshToken'];
+    var storedToken = (typeof items['radarToken'] == 'undefined') ? null : items['radarToken'];
+    var storedRefreshToken = (typeof items['radarRefreshToken'] == 'undefined') ? null : items['radarRefreshToken'];
+    var storedClientId = (typeof items['radarClientId'] == 'undefined') ? null : items['radarClientId'];
+    if ((storedToken != null || storedRefreshToken != null) && storedClientId != ESI_CLIENT_ID) {
+      token = null;
+      refreshToken = null;
+      credentialClientId = null;
+      return localSet_Promise({
+        radarToken: null,
+        radarRefreshToken: null,
+        radarClientId: null
+      });
+    }
+    token = storedToken;
+    refreshToken = storedRefreshToken;
+    credentialClientId = storedClientId;
+    if (token == null && refreshToken != null && credentialClientId == ESI_CLIENT_ID) {
+      initializationPending = true;
+    }
   })
 }
 
 var token = null;
 var refreshToken = null;
+var credentialClientId = null;
+var loginInProgress = false;
 var radarTrackingEnabled = false;
 var systemName = null;
 var region = null;
@@ -420,14 +497,37 @@ var characterID = null;
 var characterHeartbeat = null;
 var initializationPending = false;
 var initializationInProgress = false;
-// since the radarTrackingTrigger function wasn't defined when we rendered our HTML, we set it here instead
-reactiveData.trackingTriggerFunction = radarTrackingTrigger
 
-// Promise wrapper for chrome.storage.local.get
-const localGet_Promise = key => new Promise(resolve => chrome.storage.local.get(key, resolve));
+// Promise wrappers for chrome.storage.local
+const localGet_Promise = key => new Promise((resolve, reject) => chrome.storage.local.get(key, items => {
+  var lastError = chrome.runtime.lastError;
+  if (lastError) {
+    reject({error: 'transient'});
+    return;
+  }
+  resolve(items || {});
+}));
+const localSet_Promise = values => new Promise((resolve, reject) => chrome.storage.local.set(values, () => {
+  var lastError = chrome.runtime.lastError;
+  if (lastError) {
+    reject({error: 'transient'});
+    return;
+  }
+  resolve();
+}));
+
+function StartHeartbeat() {
+  if (characterHeartbeat == null) {
+    characterHeartbeat = setInterval(FindCharacter, 1000);
+  }
+}
+
+reactiveData.signInLink = 'javascript:;';
+reactiveData.signInOnClick = StartLogin;
+reactiveData.trackingTriggerFunction = radarTrackingTrigger;
 
 // 'main'
-ExtractAuthCode(location.href)
+InitializeTrackingFromLocation()
 .then( () => {
   return syncData();
 })
@@ -452,9 +552,9 @@ ExtractAuthCode(location.href)
   }
 })
 .then ( () => {
-  characterHeartbeat = setInterval(FindCharacter, 1000);
+  StartHeartbeat();
 })
 .catch( () => {
   initializationPending = true;
-  characterHeartbeat = setInterval(FindCharacter, 1000);
+  StartHeartbeat();
 });
