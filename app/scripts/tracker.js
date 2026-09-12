@@ -15,7 +15,7 @@ var logoutInProgress = false;
 function BackgroundMessage(request) {
   return new Promise(function(resolve, reject) {
     var settled = false;
-    var timeout = setTimeout(function() {
+    var timeout = request.contentScriptQuery == 'startAuth' ? null : setTimeout(function() {
       if (!settled) {
         settled = true;
         reject({error: 'unavailable'});
@@ -158,7 +158,8 @@ function ApplySession(session) {
   reactiveData.notifierDisplay = '';
   reactiveData.topbarContainerAnimation = 'none';
   reactiveData.topbarContainerAnimationModifier = 'none';
-  reactiveData.notifierData = 'Tracking... | ';
+  reactiveData.trackingTriggerText = radarTrackingEnabled ? 'Stop Tracking' : 'Start Tracking';
+  reactiveData.notifierData = radarTrackingEnabled ? 'Tracking... | ' : 'Not Tracking | ';
   reactiveData.characterPortrait = 'https://image.eveonline.com/Character/'+characterID+'_32.jpg';
   SetSignedInStateTopbar();
 }
