@@ -73,6 +73,9 @@ function SetSignedInStateTopbar() {
 }
 
 function SetSignedOutStateTopbar() {
+  verifiedSessionCache = null;
+  verifiedSessionPromise = null;
+  sessionRecoveryPromise = null;
   reactiveData.signInText = 'Sign in';
   reactiveData.signInLink = 'javascript:;';
   reactiveData.signInOnClick = StartLogin;
@@ -90,6 +93,146 @@ function SetSignedOutStateTopbar() {
   token = null;
   refreshToken = null;
   credentialClientId = null;
+}
+
+function GetSessionSnapshot() {
+  return {
+    token: token,
+    refreshToken: refreshToken,
+    clientId: credentialClientId
+  };
+}
+
+function SessionsMatch(first, second) {
+  return first != null && second != null && first.token === second.token &&
+    first.refreshToken === second.refreshToken && first.clientId === second.clientId;
+}
+
+function ResetCharacterDetails() {
+  characterID = null;
+  reactiveData.characterName = 'No character logged in';
+  reactiveData.charLocationDisplay = 'none';
+  reactiveData.notifierDisplay = 'none';
+  reactiveData.characterPortrait = '';
+  reactiveData.characterLocation = '';
+}
+
+function SessionIsCurrent(session) {
+  if (!SessionsMatch(session, GetSessionSnapshot())) {
+    return Promise.resolve(false);
+  }
+  return localGet_Promise(['radarToken', 'radarRefreshToken', 'radarClientId'])
+    .then(function(items) {
+      var storedSession = {
+        token: (typeof items.radarToken == 'undefined') ? null : items.radarToken,
+        refreshToken: (typeof items.radarRefreshToken == 'undefined') ? null : items.radarRefreshToken,
+        clientId: (typeof items.radarClientId == 'undefined') ? null : items.radarClientId
+      };
+      if (!SessionsMatch(session, storedSession) || !SessionsMatch(session, GetSessionSnapshot())) {
+        return false;
+      }
+      return CredentialInvalidationExists(session).then(function(invalidated) {
+        return !invalidated && SessionsMatch(session, GetSessionSnapshot());
+      });
+    });
+}
+
+function SessionUseIsCurrent(session) {
+  var currentSession = session && session.session ? session.session : session;
+  var expiration = session && session.session ? session.exp : session && session.exp;
+  if (!currentSession || typeof currentSession.token != 'string' || currentSession.token.length == 0 ||
+      typeof currentSession.refreshToken != 'string' || currentSession.refreshToken.length == 0 ||
+      currentSession.clientId !== ESI_CLIENT_ID || typeof expiration != 'number' ||
+      !isFinite(expiration) || expiration <= Date.now() / 1000) {
+    return Promise.resolve(false);
+  }
+  return SessionIsCurrent(currentSession);
+}
+
+function GetVerifiedSessionFor(session) {
+  if (!session || typeof session.token != 'string' || session.token.length == 0 ||
+      typeof session.refreshToken != 'string' || session.refreshToken.length == 0 ||
+      session.clientId !== ESI_CLIENT_ID) {
+    return Promise.reject({error: 'invalid_token'});
+  }
+  if (verifiedSessionCache != null && SessionsMatch(verifiedSessionCache.session, session)) {
+    return SessionIsCurrent(session).then(function(isCurrent) {
+      if (!isCurrent) {
+        throw {error: 'stale'};
+      }
+      if (verifiedSessionCache.expiresAt > Date.now() &&
+          verifiedSessionCache.exp > Date.now() / 1000) {
+        return verifiedSessionCache;
+      }
+      verifiedSessionCache = null;
+      return GetVerifiedSessionFor(session);
+    });
+  }
+  if (verifiedSessionPromise != null && SessionsMatch(verifiedSessionPromise.session, session)) {
+    return verifiedSessionPromise.promise;
+  }
+  var pending = {
+    session: session,
+    promise: null
+  };
+  var request = SessionIsCurrent(session)
+    .then(function(isCurrent) {
+      if (!isCurrent) {
+        throw {error: 'stale'};
+      }
+      return CredentialMessage_Promise({
+        contentScriptQuery: 'verifyToken',
+        token: session.token,
+        refreshToken: session.refreshToken,
+        clientId: session.clientId
+      });
+    })
+    .then(function(response) {
+      if (!response || response.error) {
+        throw response && response.error ? {error: response.error} : {error: 'transient'};
+      }
+      if (typeof response.characterID != 'string' || !/^[0-9]+$/.test(response.characterID) ||
+          typeof response.characterName != 'string' || response.characterName.trim().length == 0 ||
+          typeof response.exp != 'number' || !isFinite(response.exp)) {
+        throw {error: 'invalid_token'};
+      }
+      return SessionIsCurrent(session).then(function(isCurrent) {
+        if (!isCurrent || response.exp <= Date.now() / 1000) {
+          throw {error: isCurrent ? 'invalid_token' : 'stale'};
+        }
+        return {
+          session: session,
+          characterID: response.characterID,
+          characterName: response.characterName,
+          exp: response.exp,
+          expiresAt: Math.min(response.exp * 1000, Date.now() + 5000)
+        };
+      });
+    });
+  pending.promise = request.then(function(result) {
+    if (verifiedSessionPromise === pending) {
+      verifiedSessionPromise = null;
+    }
+    verifiedSessionCache = result;
+    return result;
+  }, function(error) {
+    if (verifiedSessionPromise === pending) {
+      verifiedSessionPromise = null;
+    }
+    throw error && error.error ? error : {error: 'transient'};
+  });
+  verifiedSessionPromise = pending;
+  return pending.promise;
+}
+
+function ClearInvalidSessionIfCurrent(session) {
+  return SessionIsCurrent(session).then(function(isCurrent) {
+    if (!isCurrent) {
+      throw {error: 'stale'};
+    }
+    SetLogoutStateTopbar(session);
+    throw {error: 'invalid_token'};
+  });
 }
 
 function RestoreLoginState(loginAttempt) {
@@ -120,42 +263,71 @@ function RestoreLoginState(loginAttempt) {
  * if the token is good, the information in the topbar is set
  * if it's bad, we try to refresh the token
  */
-function GetCharacterID() {
-  return Promise.resolve().then( () => {
-    var base64Url = token.split('.')[1];
-    var base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    var jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function(c) {
-        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-    }).join(''));
-
-    response = JSON.parse(jsonPayload);
-    if (typeof response['name'] == 'undefined' || typeof response['sub'] == 'undefined') {
-      throw "bad token"
-    }
-
-    characterID = response.sub.split(':')[2];
-    reactiveData.characterName = response.name;
-    reactiveData.charLocationDisplay = '';
-    reactiveData.notifierDisplay = '';
-    reactiveData.topbarContainerAnimation = 'none';
-    reactiveData.topbarContainerAnimationModifier = 'none';
-    reactiveData.notifierData = 'Tracking... | ';
-    reactiveData.characterPortrait = 'https://image.eveonline.com/Character/'+characterID+'_32.jpg';
-  })
-  .catch( (error) => {
-    console.log('Unable to read character token');
-    return localGet_Promise(['radarRefreshToken', 'radarClientId'])
-    .then( (items) => {
-      refreshToken = (typeof items['radarRefreshToken'] == 'undefined') ? null : items['radarRefreshToken'];
-      credentialClientId = (typeof items['radarClientId'] == 'undefined') ? null : items['radarClientId'];
-      if (refreshToken != null) {
-        return AttemptRefreshToken(refreshToken)
-        .then( () => {
-          return GetCharacterID();
+function GetCharacterID(allowRefresh) {
+  if (typeof allowRefresh == 'undefined') {
+    allowRefresh = true;
+  }
+  var requestedSession = GetSessionSnapshot();
+  return GetVerifiedSessionFor(requestedSession)
+    .then(function(verified) {
+      return SessionIsCurrent(requestedSession).then(function(isCurrent) {
+        if (!isCurrent || !SessionsMatch(requestedSession, GetSessionSnapshot())) {
+          throw {error: 'stale'};
+        }
+        characterID = verified.characterID;
+        reactiveData.characterName = verified.characterName;
+        reactiveData.charLocationDisplay = '';
+        reactiveData.notifierDisplay = '';
+        reactiveData.topbarContainerAnimation = 'none';
+        reactiveData.topbarContainerAnimationModifier = 'none';
+        reactiveData.notifierData = 'Tracking... | ';
+        reactiveData.characterPortrait = 'https://image.eveonline.com/Character/'+characterID+'_32.jpg';
+        SetSignedInStateTopbar();
+        return verified;
+      });
+    })
+    .catch(function(error) {
+      var errorType = error && error.error;
+      if (errorType == 'stale' || errorType == 'transient') {
+        throw error;
+      }
+      if (errorType == 'invalid_token' && allowRefresh &&
+          requestedSession.refreshToken != null && requestedSession.clientId === ESI_CLIENT_ID) {
+        return SessionIsCurrent(requestedSession).then(function(isCurrent) {
+          if (!isCurrent) {
+            throw {error: 'stale'};
+          }
+          if (sessionRecoveryPromise != null &&
+              SessionsMatch(sessionRecoveryPromise.session, requestedSession)) {
+            return sessionRecoveryPromise.promise.then(function() {
+              return GetCharacterID(false);
+            });
+          }
+          var recovery = {
+            session: requestedSession,
+            promise: null
+          };
+          recovery.promise = AttemptRefreshToken(requestedSession.refreshToken)
+            .then(function() {
+              if (sessionRecoveryPromise === recovery) {
+                sessionRecoveryPromise = null;
+              }
+              return GetCharacterID(false);
+            }, function(recoveryError) {
+              if (sessionRecoveryPromise === recovery) {
+                sessionRecoveryPromise = null;
+              }
+              throw recoveryError;
+            });
+          sessionRecoveryPromise = recovery;
+          return recovery.promise;
         });
       }
-    })
-  })
+      if (errorType == 'invalid_token') {
+        return ClearInvalidSessionIfCurrent(requestedSession);
+      }
+      throw {error: 'transient'};
+    });
 }
 
 /*
@@ -169,6 +341,7 @@ function GetCharacterID() {
  */
 function FindCharacter() {
   var initializing = false;
+  var locationSession = null;
   return syncData()
   .then( () => {
     if (initializationPending && !initializationInProgress && refreshToken != null) {
@@ -221,66 +394,102 @@ function FindCharacter() {
         radarTrackingTrigger();
       }
       if (characterID == null) {
-        return GetCharacterID();
+        return GetCharacterID(true).then(function(verified) {
+          locationSession = verified;
+        });
       }
+      return GetCharacterID(true).then(function(verified) {
+        locationSession = verified;
+      });
     }
   })
   .then( () => {
     if (initializing) {
       return;
     }
-    return axios({
-      method: 'get',
-      url: 'https://esi.evetech.net/latest/characters/'+characterID+'/location/?language=en',
-      headers: {Authorization: 'Bearer '+token}
-    })
+    if (locationSession == null) {
+      throw {error: 'stale'};
+    }
+    return SessionUseIsCurrent(locationSession).then(function(isCurrent) {
+      if (!isCurrent || characterID != locationSession.characterID) {
+        throw {error: 'stale'};
+      }
+      return axios({
+        method: 'get',
+        url: 'https://esi.evetech.net/latest/characters/'+locationSession.characterID+'/location/?language=en',
+        headers: {Authorization: 'Bearer '+locationSession.session.token}
+      });
+    });
   })
   .then( (response) => {
     if (initializing) {
       return;
     }
-    if (characterLocation == response.data['solar_system_id']) {throw 'no update';}
-    characterLocation = response.data['solar_system_id'];
-    return axios({
-      method: 'get',
-      url: 'https://esi.evetech.net/latest/universe/systems/'+response.data['solar_system_id']+'/?language=en'
-    })
+    return SessionUseIsCurrent(locationSession).then(function(isCurrent) {
+      if (!isCurrent || characterID != locationSession.characterID) {
+        throw {error: 'stale'};
+      }
+      if (characterLocation == response.data['solar_system_id']) {throw 'no update';}
+      characterLocation = response.data['solar_system_id'];
+      return axios({
+        method: 'get',
+        url: 'https://esi.evetech.net/latest/universe/systems/'+response.data['solar_system_id']+'/?language=en'
+      });
+    });
   })
   .then( (response) => {
     if (initializing) {
       return;
     }
-    systemName = response.data['name'].replace(/ /gi, '_');
-    return axios({
-      method: 'get',
-      url: 'https://esi.evetech.net/latest/universe/constellations/'+response.data['constellation_id']+'/?language=en'
-    })
+    return SessionUseIsCurrent(locationSession).then(function(isCurrent) {
+      if (!isCurrent || characterID != locationSession.characterID) {
+        throw {error: 'stale'};
+      }
+      systemName = response.data['name'].replace(/ /gi, '_');
+      return axios({
+        method: 'get',
+        url: 'https://esi.evetech.net/latest/universe/constellations/'+response.data['constellation_id']+'/?language=en'
+      });
+    });
   })
   .then( (response) => {
     if (initializing) {
       return;
     }
-    return axios({
-      method: 'get',
-      url: 'https://esi.evetech.net/latest/universe/regions/'+response.data['region_id']+'/?language=en'
-    })
+    return SessionUseIsCurrent(locationSession).then(function(isCurrent) {
+      if (!isCurrent || characterID != locationSession.characterID) {
+        throw {error: 'stale'};
+      }
+      return axios({
+        method: 'get',
+        url: 'https://esi.evetech.net/latest/universe/regions/'+response.data['region_id']+'/?language=en'
+      });
+    });
   })
   .then( (response) => {
     if (initializing) {
       return;
     }
-    region = response.data['name'].replace(/ /gi, '_');
-    reactiveData.characterLocation = systemName+', '+region;
-    if (location.pathname.split('#')[0] != '/map/'+region+'/'+systemName &&
-        location.pathname.split(':')[0] != '/map/'+region+'/'+systemName) {
-      ChangePage(region, systemName);
-    }
+    return SessionUseIsCurrent(locationSession).then(function(isCurrent) {
+      if (!isCurrent || characterID != locationSession.characterID) {
+        throw {error: 'stale'};
+      }
+      region = response.data['name'].replace(/ /gi, '_');
+      reactiveData.characterLocation = systemName+', '+region;
+      if (location.pathname.split('#')[0] != '/map/'+region+'/'+systemName &&
+          location.pathname.split(':')[0] != '/map/'+region+'/'+systemName) {
+        ChangePage(region, systemName);
+      }
+    });
   })
   .catch( error => {
     if (error == 'no update'){
       throw 'no update';
     }
     else if (error == 'tracking stopped'){
+      throw 'tracking stopped';
+    }
+    else if (error && error.error == 'invalid_token') {
       throw 'tracking stopped';
     }
     else if (error && (error.error == 'transient' || error.error == 'stale')) {
@@ -614,6 +823,7 @@ function radarTrackingTrigger() {
  */
 function syncData() {
   var syncGeneration = loginAttemptGeneration;
+  var previousSession = GetSessionSnapshot();
   return localGet_Promise(['radarToken', 'radarRefreshToken', 'radarClientId'])
   .then( (items) => {
     if (syncGeneration != loginAttemptGeneration) {
@@ -627,18 +837,32 @@ function syncData() {
       refreshToken: storedRefreshToken,
       clientId: storedClientId
     };
+    if (!SessionsMatch(previousSession, storedCredentials)) {
+      verifiedSessionCache = null;
+      verifiedSessionPromise = null;
+      sessionRecoveryPromise = null;
+      ResetCharacterDetails();
+    }
     return CredentialInvalidationExists(storedCredentials)
     .then(function(invalidated) {
       if (syncGeneration != loginAttemptGeneration) {
         throw {error: 'stale'};
       }
       if (invalidated) {
+        verifiedSessionCache = null;
+        verifiedSessionPromise = null;
+        sessionRecoveryPromise = null;
+        ResetCharacterDetails();
         token = null;
         refreshToken = null;
         credentialClientId = null;
         return ClearStoredCredentialsIfCurrent(storedCredentials);
       }
       if ((storedToken != null || storedRefreshToken != null) && storedClientId != ESI_CLIENT_ID) {
+        verifiedSessionCache = null;
+        verifiedSessionPromise = null;
+        sessionRecoveryPromise = null;
+        ResetCharacterDetails();
         token = null;
         refreshToken = null;
         credentialClientId = null;
@@ -667,6 +891,9 @@ var characterHeartbeat = null;
 var initializationPending = false;
 var initializationInProgress = false;
 var loginAttemptGeneration = 0;
+var verifiedSessionCache = null;
+var verifiedSessionPromise = null;
+var sessionRecoveryPromise = null;
 
 // Promise wrappers for chrome.storage.local
 const localGet_Promise = key => new Promise((resolve, reject) => chrome.storage.local.get(key, items => {

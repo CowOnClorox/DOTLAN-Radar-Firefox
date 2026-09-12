@@ -403,6 +403,56 @@ function NormalizeTokenValidationError(error) {
   return error && error.error == 'transient' ? {error: 'transient'} : {error: 'invalid_token'};
 }
 
+function VerifyStoredToken(credentials) {
+  if (!credentials || typeof credentials.token != 'string' || credentials.token.length == 0 ||
+      typeof credentials.refreshToken != 'string' || credentials.refreshToken.length == 0 ||
+      credentials.clientId !== ESI_CLIENT_ID) {
+    return Promise.resolve({error: 'invalid_token'});
+  }
+  return ReadStoredCredentials()
+    .then(function(current) {
+      if (!StoredCredentialsMatch(current, credentials)) {
+        return {error: 'stale'};
+      }
+      return CredentialInvalidationExists(credentials)
+        .then(function(invalidated) {
+          if (invalidated) {
+            return {error: 'stale'};
+          }
+          return ValidateAccessToken(credentials.token)
+            .then(function(claims) {
+              return ReadStoredCredentials()
+                .then(function(currentAfterValidation) {
+                  if (!StoredCredentialsMatch(currentAfterValidation, credentials)) {
+                    return {error: 'stale'};
+                  }
+                  return CredentialInvalidationExists(credentials)
+                    .then(function(invalidatedAfterValidation) {
+                      if (invalidatedAfterValidation) {
+                        return {error: 'stale'};
+                      }
+                      if (!ValidateAccessTokenClaims(claims)) {
+                        return {error: 'invalid_token'};
+                      }
+                      return {
+                        characterID: claims.sub.split(':')[2],
+                        characterName: claims.name,
+                        exp: claims.exp
+                      };
+                    });
+                });
+            });
+        });
+    })
+    .catch(function(error) {
+      if (error && (error.error == 'stale' || error.error == 'invalid_token' ||
+          error.error == 'transient')) {
+        return {error: error.error};
+      }
+      return {error: 'transient'};
+    });
+}
+
 function ClassifyTokenResponse(response, payload, refreshTokenOptional) {
   if (!response || response.status < 200 || response.status >= 300) {
     if (response && response.status == 400 && payload && payload.error == 'invalid_grant') {
@@ -951,6 +1001,17 @@ chrome.runtime.onMessage.addListener(
       ]), true)
       .then(function(result) {
         refreshRespond(result);
+      });
+      return true;
+    }
+    else if (request.contentScriptQuery == 'verifyToken') {
+      var verifyRespond = RespondOnce(sendResponse);
+      VerifyStoredToken({
+        token: request.token,
+        refreshToken: request.refreshToken,
+        clientId: request.clientId
+      }).then(function(result) {
+        verifyRespond(result);
       });
       return true;
     }

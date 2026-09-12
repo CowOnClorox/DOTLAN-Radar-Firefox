@@ -2,20 +2,51 @@
  * Uses ESI to add a new waypoint to EVE client, then changes URL to include the waypoint
  */
 function addWaypoint(location, asDestination) {
-  axios({
+  var actionSession = GetSessionSnapshot();
+  if (!actionSession || typeof actionSession.token != 'string' || actionSession.token.length == 0 ||
+      typeof actionSession.refreshToken != 'string' || actionSession.refreshToken.length == 0 ||
+      actionSession.clientId !== ESI_CLIENT_ID) {
+    console.log('Waypoint request failed');
+    return Promise.resolve();
+  }
+  return axios({
     method: 'post',
     url: 'https://esi.evetech.net/latest/universe/ids/?language=en',
     data: '["' + location + '"]'
   },
   )
   .then( (response) => {
-    return axios({
-      method: 'post',
-      url: 'https://esi.evetech.net/latest/ui/autopilot/waypoint/?language=en&add_to_beginning=false&clear_other_waypoints='+asDestination+'&destination_id='+response.data['systems'][0]['id'],
-      headers: {Authorization: 'Bearer '+token}
-    })
+    if (!SessionsMatch(actionSession, GetSessionSnapshot())) {
+      throw {error: 'stale'};
+    }
+    return GetVerifiedSessionFor(actionSession).then(function(verified) {
+      return SessionUseIsCurrent(verified).then(function(isCurrent) {
+        if (!isCurrent) {
+          throw {error: 'stale'};
+        }
+        return {destination: response.data['systems'][0]['id'], verified: verified};
+      });
+    });
   })
-  .then( () => {
+  .then( (destination) => {
+    return SessionUseIsCurrent(destination.verified).then(function(isCurrent) {
+      if (!isCurrent) {
+        throw {error: 'stale'};
+      }
+      return axios({
+        method: 'post',
+        url: 'https://esi.evetech.net/latest/ui/autopilot/waypoint/?language=en&add_to_beginning=false&clear_other_waypoints='+asDestination+'&destination_id='+destination.destination,
+        headers: {Authorization: 'Bearer '+destination.verified.session.token}
+      }).then(function() {
+        return destination.verified;
+      });
+    });
+  })
+  .then( (verified) => {
+    return SessionUseIsCurrent(verified).then(function(isCurrent) {
+      if (!isCurrent) {
+        throw {error: 'stale'};
+      }
     if (radarTrackingEnabled){
       var waypointString = '';
       if (asDestination) {
@@ -38,6 +69,7 @@ function addWaypoint(location, asDestination) {
       var hash = window.location.hash;
       window.location.assign('https://evemaps.dotlan.net/map/'+region+'/'+systemName+waypointString+'?tracking'+hash);
     }
+    });
   })
   .catch( (error) => {
     console.log('Waypoint request failed');
