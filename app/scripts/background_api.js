@@ -159,115 +159,47 @@ function ValidateAccessTokenClaims(claims) {
   return true;
 }
 
-function FetchWithTimeout(url, options) {
-  return new Promise(function(resolve, reject) {
-    var controller = null;
-    var requestOptions = options || {};
-    if (typeof AbortController == 'function') {
-      controller = new AbortController();
-      requestOptions.signal = controller.signal;
-    }
-    var settled = false;
-    var responseBodyPromise = null;
-    var responseBodyReject = null;
-    var timeout = setTimeout(function() {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (controller) {
-        controller.abort();
-      }
-      if (responseBodyReject != null) {
-        var rejectBody = responseBodyReject;
-        responseBodyReject = null;
-        rejectBody({error: 'transient'});
-        return;
-      }
-      reject({error: 'transient'});
-    }, ESI_FETCH_TIMEOUT_MS);
-    try {
-      Promise.resolve(fetch(url, requestOptions))
-        .then(function(response) {
-          if (settled) {
-            return;
-          }
-          if (!response || typeof response.json != 'function') {
-            settled = true;
-            clearTimeout(timeout);
-            reject({error: 'transient'});
-            return;
-          }
-          var timedResponse = {
-            status: response.status,
-            redirected: response.redirected
-          };
-          timedResponse.json = function() {
-            if (responseBodyPromise != null) {
-              return responseBodyPromise;
-            }
-            if (settled) {
-              return Promise.reject({error: 'transient'});
-            }
-            responseBodyPromise = new Promise(function(resolveBody, rejectBody) {
-              responseBodyReject = rejectBody;
-              Promise.resolve()
-                .then(function() {
-                  return response.json();
-                })
-                .then(function(body) {
-                  if (settled) {
-                    return;
-                  }
-                  settled = true;
-                  responseBodyReject = null;
-                  clearTimeout(timeout);
-                  resolveBody(body);
-                })
-                .catch(function() {
-                  if (settled) {
-                    return;
-                  }
-                  settled = true;
-                  responseBodyReject = null;
-                  clearTimeout(timeout);
-                  rejectBody({error: 'transient'});
-                });
-            });
-            return responseBodyPromise;
-          };
-          resolve(timedResponse);
-        })
-        .catch(function() {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          clearTimeout(timeout);
-          reject({error: 'transient'});
-        });
-    }
-    catch (error) {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timeout);
-        reject({error: 'transient'});
-      }
-    }
+function FetchWithTimeout(url, options, consumeResponse) {
+  var requestOptions = Object.assign({}, options || {}, {
+    signal: AbortSignal.timeout(ESI_FETCH_TIMEOUT_MS)
   });
+  return Promise.resolve()
+    .then(function() {
+      return fetch(url, requestOptions);
+    })
+    .then(function(response) {
+      return consumeResponse(response);
+    })
+    .catch(function() {
+      throw {error: 'transient'};
+    });
 }
 
 function FetchJson(url) {
-  return FetchWithTimeout(url, {redirect: 'error', credentials: 'omit'})
-    .then(function(response) {
-      if (!response || response.redirected === true || response.status < 200 || response.status >= 300 ||
-          typeof response.json != 'function') {
-        throw {error: 'transient'};
-      }
-      return Promise.resolve(response.json()).catch(function() {
-        throw {error: 'transient'};
-      });
+  return FetchWithTimeout(url, {redirect: 'error', credentials: 'omit'}, function(response) {
+    if (!response || response.redirected === true || response.status < 200 || response.status >= 300 ||
+        typeof response.json != 'function') {
+      throw {error: 'transient'};
+    }
+    return response.json();
+  });
+}
+
+function FetchTokenResponse(body, refreshTokenOptional) {
+  return FetchWithTimeout(ESI_TOKEN_URL, {
+    method: 'post',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: body
+  }, function(response) {
+    if (!response || typeof response.json != 'function') {
+      throw {error: 'transient'};
+    }
+    return Promise.resolve(response.json()).then(function(payload) {
+      return ClassifyTokenResponse(response, payload, refreshTokenOptional);
     });
+  });
 }
 
 function IsTrustedJwkForToken(jwk, header) {
@@ -377,7 +309,17 @@ function VerifyAccessTokenSignature(parsedToken, forceRefresh) {
         .catch(function() {
           return false;
         });
-    });
+  });
+}
+
+function CreateVerifiedDetails(token, claims) {
+  return {
+    token: token,
+    characterID: claims.sub.split(':')[2],
+    characterName: claims.name,
+    exp: claims.exp,
+    claims: claims
+  };
 }
 
 function ValidateAccessToken(token) {
@@ -391,14 +333,14 @@ function ValidateAccessToken(token) {
         if (!ValidateAccessTokenClaims(parsedToken.payload)) {
           throw {error: 'invalid_token'};
         }
-        return parsedToken.payload;
+        return CreateVerifiedDetails(token, parsedToken.payload);
       }
       return VerifyAccessTokenSignature(parsedToken, true)
         .then(function(rotatedValid) {
           if (!rotatedValid || !ValidateAccessTokenClaims(parsedToken.payload)) {
             throw {error: 'invalid_token'};
           }
-          return parsedToken.payload;
+          return CreateVerifiedDetails(token, parsedToken.payload);
         });
     });
 }
@@ -414,14 +356,6 @@ function VerifyStoredToken(credentials) {
     return Promise.resolve({error: 'invalid_token'});
   }
   return ValidateAccessToken(credentials.token)
-    .then(function(claims) {
-      return {
-        characterID: claims.sub.split(':')[2],
-        characterName: claims.name,
-        exp: claims.exp,
-        claims: claims
-      };
-    })
     .catch(function(error) {
       if (error && (error.error == 'stale' || error.error == 'invalid_token' ||
           error.error == 'transient')) {
@@ -452,38 +386,19 @@ function ClassifyTokenResponse(response, payload, refreshTokenOptional) {
 }
 
 function RequestToken(body, refreshTokenOptional) {
-  return Promise.resolve()
-    .then(function() {
-      return FetchWithTimeout(ESI_TOKEN_URL, {
-        method: 'post',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        body: body
-      });
-    })
-    .then(function(response) {
-      return response.json()
-        .then(function(payload) {
-          var result = ClassifyTokenResponse(response, payload, refreshTokenOptional);
-          if (result.error) {
-            return result;
-          }
-          return ValidateAccessToken(result.access_token)
-            .then(function(claims) {
-              result.claims = claims;
-              return result;
-            })
-            .catch(function(error) {
-              return NormalizeTokenValidationError(error);
-            });
+  return FetchTokenResponse(body, refreshTokenOptional)
+    .then(function(result) {
+      if (result.error) {
+        return result;
+      }
+      return ValidateAccessToken(result.access_token)
+        .then(function(details) {
+          result.details = details;
+          return result;
         })
-        .catch(function() {
-          return {error: 'transient'};
+        .catch(function(error) {
+          return NormalizeTokenValidationError(error);
         });
-    })
-    .catch(function() {
-      return {error: 'transient'};
     });
 }
 
@@ -555,6 +470,10 @@ function StoredCredentialsEmpty(credentials) {
     credentials.clientId == null;
 }
 
+function EmptyCredentials() {
+  return {token: null, refreshToken: null, clientId: null};
+}
+
 function QueueCredentialMutation(operation) {
   var result = credentialMutationQueue.then(operation).catch(function(error) {
     return error && error.error ? error : {error: 'transient'};
@@ -567,10 +486,18 @@ function LogoutReservationMatches(expected) {
   return logoutSession != null && StoredCredentialsMatch(logoutSession, expected);
 }
 
-function QueueCredentialWrite(credentials, expected) {
+function VerifiedDetailsAreCurrent(details, credentials) {
+  return details != null && details.token === credentials.token &&
+    typeof details.characterID == 'string' && details.characterID.length > 0 &&
+    typeof details.characterName == 'string' && details.characterName.length > 0 &&
+    typeof details.exp == 'number' && isFinite(details.exp) &&
+    details.exp > Date.now() / 1000;
+}
+
+function QueueCredentialWrite(credentials, expected, details) {
   if (!credentials || typeof credentials.token != 'string' || credentials.token.length == 0 ||
       typeof credentials.refreshToken != 'string' || credentials.refreshToken.length == 0 ||
-      credentials.clientId !== ESI_CLIENT_ID) {
+      credentials.clientId !== ESI_CLIENT_ID || !VerifiedDetailsAreCurrent(details, credentials)) {
     return Promise.resolve({error: 'invalid_token'});
   }
   return QueueCredentialMutation(function() {
@@ -581,41 +508,35 @@ function QueueCredentialWrite(credentials, expected) {
       if (!StoredCredentialsMatch(current, expected) || LogoutReservationMatches(expected)) {
         return {error: 'stale'};
       }
-      return ValidateAccessToken(credentials.token).then(function(details) {
-        if (LogoutReservationMatches(expected)) {
+      if (!VerifiedDetailsAreCurrent(details, credentials)) {
+        return {error: 'invalid_token'};
+      }
+      return ReadStoredCredentials().then(function(currentBeforeWrite) {
+        if (!StoredCredentialsMatch(currentBeforeWrite, expected) ||
+            LogoutReservationMatches(expected)) {
           return {error: 'stale'};
         }
-        return ReadStoredCredentials().then(function(currentAfterValidation) {
-          if (!StoredCredentialsMatch(currentAfterValidation, expected) ||
-              LogoutReservationMatches(expected)) {
-            return {error: 'stale'};
+        if (!VerifiedDetailsAreCurrent(details, credentials)) {
+          return {error: 'invalid_token'};
+        }
+        return WriteStoredCredentials(credentials).then(function() {
+          if (!LogoutReservationMatches(expected)) {
+            knownCredentials = credentials;
+            sessionRevision += 1;
+            return CacheSession({credentials: credentials, revision: sessionRevision}, details);
           }
-          return WriteStoredCredentials(credentials).then(function() {
-            if (!LogoutReservationMatches(expected)) {
-              knownCredentials = NormalizeStoredCredentials(credentials);
-              sessionRevision += 1;
-              return CacheSession({credentials: credentials, revision: sessionRevision}, {
-                characterID: details.sub.split(':')[2],
-                characterName: details.name,
-                exp: details.exp
-              });
+          return ReadStoredCredentials().then(function(afterWrite) {
+            if (!StoredCredentialsMatch(afterWrite, credentials)) {
+              return {error: 'stale'};
             }
-            return ReadStoredCredentials().then(function(afterWrite) {
-              if (!StoredCredentialsMatch(afterWrite, credentials)) {
-                return {error: 'stale'};
-              }
-              return WriteStoredCredentials({token: null, refreshToken: null, clientId: null})
-                .then(function() {
-                  knownCredentials = NormalizeStoredCredentials({});
-                  verifiedSession = null;
-                  sessionRevision += 1;
-                  return {error: 'stale'};
-                });
+            return WriteStoredCredentials(EmptyCredentials()).then(function() {
+              knownCredentials = EmptyCredentials();
+              verifiedSession = null;
+              sessionRevision += 1;
+              return {error: 'stale'};
             });
           });
         });
-      }).catch(function(error) {
-        return NormalizeTokenValidationError(error);
       });
     });
   });
@@ -628,9 +549,9 @@ function QueueCredentialClear(expected) {
         if (!StoredCredentialsMatch(current, expected)) {
           return {error: 'stale'};
         }
-        return WriteStoredCredentials({token: null, refreshToken: null, clientId: null})
+        return WriteStoredCredentials(EmptyCredentials())
           .then(function() {
-            knownCredentials = NormalizeStoredCredentials({});
+            knownCredentials = EmptyCredentials();
             verifiedSession = null;
             sessionRevision += 1;
             return {};
@@ -642,7 +563,7 @@ function QueueCredentialClear(expected) {
 function ReadSessionState() {
   return ReadStoredCredentials().then(function(credentials) {
     if (knownCredentials == null || !StoredCredentialsMatch(knownCredentials, credentials)) {
-      knownCredentials = NormalizeStoredCredentials(credentials);
+      knownCredentials = credentials;
       sessionRevision += 1;
       verifiedSession = null;
       if (refreshBackoff != null && !StoredCredentialsMatch(refreshBackoff.credentials, credentials)) {
@@ -657,18 +578,10 @@ function ReadSessionState() {
 }
 
 function SessionView(state, details) {
-  var characterID = details.characterID;
-  var characterName = details.characterName;
-  if (typeof characterID == 'undefined' && typeof details.sub == 'string') {
-    characterID = details.sub.split(':')[2];
-  }
-  if (typeof characterName == 'undefined') {
-    characterName = details.name;
-  }
   return {
-    token: state.credentials.token,
-    characterID: characterID,
-    characterName: characterName,
+    token: details.token,
+    characterID: details.characterID,
+    characterName: details.characterName,
     exp: details.exp,
     sessionId: state.revision
   };
@@ -676,7 +589,7 @@ function SessionView(state, details) {
 
 function CacheSession(state, details) {
   verifiedSession = {
-    credentials: NormalizeStoredCredentials(state.credentials),
+    credentials: state.credentials,
     revision: state.revision,
     view: SessionView(state, details)
   };
@@ -708,7 +621,7 @@ function VerifyCurrentSession(state) {
 function SetRefreshBackoff(state) {
   if (knownCredentials != null && StoredCredentialsMatch(knownCredentials, state.credentials)) {
     refreshBackoff = {
-      credentials: NormalizeStoredCredentials(state.credentials),
+      credentials: state.credentials,
       revision: state.revision,
       retryAt: Date.now() + 2000
     };
@@ -720,7 +633,7 @@ function ClearCurrentSession(expected) {
     if (!StoredCredentialsMatch(state.credentials, expected)) {
       return {error: 'stale'};
     }
-    logoutSession = NormalizeStoredCredentials(expected);
+    logoutSession = expected;
     if (activeAuthAttempt != null &&
         StoredCredentialsMatch(activeAuthAttempt.initialCredentials, expected)) {
       activeAuthAttempt = null;
@@ -747,7 +660,7 @@ function RefreshCurrentSession(state) {
     return sharedRefreshPromise.promise;
   }
   var pending = {
-    credentials: NormalizeStoredCredentials(state.credentials),
+    credentials: state.credentials,
     revision: state.revision,
     promise: null
   };
@@ -757,10 +670,7 @@ function RefreshCurrentSession(state) {
     ['client_id', ESI_CLIENT_ID]
   ]), true).then(function(result) {
     if (result.error) {
-      if (result.error == 'invalid_grant') {
-        return ClearCurrentSession(state.credentials);
-      }
-      if (result.error == 'invalid_token') {
+      if (result.error == 'invalid_grant' || result.error == 'invalid_token') {
         return ClearCurrentSession(state.credentials);
       }
       if (result.error == 'transient') {
@@ -774,7 +684,7 @@ function RefreshCurrentSession(state) {
         result.refresh_token : state.credentials.refreshToken,
       clientId: ESI_CLIENT_ID
     };
-    return QueueCredentialWrite(replacement, state.credentials).then(function(stored) {
+    return QueueCredentialWrite(replacement, state.credentials, result.details).then(function(stored) {
       if (stored.error) {
         if (stored.error == 'invalid_token') {
           return ClearCurrentSession(state.credentials);
@@ -786,11 +696,7 @@ function RefreshCurrentSession(state) {
           return {error: 'stale'};
         }
         refreshBackoff = null;
-        return CacheSession(current, {
-          characterID: result.claims.sub.split(':')[2],
-          characterName: result.claims.name,
-          exp: result.claims.exp
-        });
+        return CacheSession(current, result.details);
       });
     });
   }).catch(function(error) {
@@ -811,7 +717,7 @@ function RefreshCurrentSession(state) {
   return pending.promise;
 }
 
-function ResolveSession(state, allowRefresh) {
+function ResolveSession(state) {
   var credentials = state.credentials;
   if (StoredCredentialsEmpty(credentials)) {
     return Promise.resolve({error: 'signed_out'});
@@ -825,7 +731,7 @@ function ResolveSession(state, allowRefresh) {
     return ClearCurrentSession(credentials);
   }
   if (typeof credentials.token != 'string' || credentials.token.length == 0) {
-    return allowRefresh ? RefreshCurrentSession(state) : Promise.resolve({error: 'invalid_token'});
+    return RefreshCurrentSession(state);
   }
   return VerifyCurrentSession(state).then(function(session) {
     return session;
@@ -836,10 +742,7 @@ function ResolveSession(state, allowRefresh) {
     if (error && error.error == 'stale') {
       return error;
     }
-    if (allowRefresh) {
-      return RefreshCurrentSession(state);
-    }
-    return ClearCurrentSession(credentials);
+    return RefreshCurrentSession(state);
   });
 }
 
@@ -853,7 +756,7 @@ function GetSession(request) {
         state.revision !== request.expectedSessionId) {
       return {error: 'stale'};
     }
-    return ResolveSession(state, true);
+    return ResolveSession(state);
   }).catch(function(error) {
     return error && error.error ? error : {error: 'transient'};
   });
@@ -924,26 +827,22 @@ function StoreAuthCredentials(attempt, payload) {
   if (activeAuthAttempt !== attempt) {
     return Promise.resolve({error: 'stale'});
   }
-  return QueueCredentialWrite({
+  var credentials = {
     token: payload.access_token,
     refreshToken: payload.refresh_token,
     clientId: ESI_CLIENT_ID
-  }, attempt.initialCredentials).then(function(result) {
+  };
+  return QueueCredentialWrite(credentials, attempt.initialCredentials, payload.details).then(function(result) {
     return activeAuthAttempt === attempt ? result : {error: 'stale'};
   }).then(function(result) {
     if (result.error) {
       return result;
     }
     return ReadSessionState().then(function(state) {
-      if (activeAuthAttempt !== attempt ||
-          !StoredCredentialsMatch(state.credentials, {
-            token: payload.access_token,
-            refreshToken: payload.refresh_token,
-            clientId: ESI_CLIENT_ID
-          })) {
+      if (activeAuthAttempt !== attempt || !StoredCredentialsMatch(state.credentials, credentials)) {
         return {error: 'stale'};
       }
-      return CacheSession(state, payload.claims);
+      return CacheSession(state, payload.details);
     });
   });
 }
@@ -1039,7 +938,7 @@ function StartAuth(sendResponse) {
       if (activeAuthAttempt !== attempt) {
         throw {error: 'stale'};
       }
-      attempt.initialCredentials = NormalizeStoredCredentials(state.credentials);
+      attempt.initialCredentials = state.credentials;
       RunAuthAttempt(attempt, respond);
     })
     .catch(function(error) {
@@ -1063,9 +962,12 @@ function RevokeRemoteToken(token, tokenTypeHint) {
       ['token', token],
       ['client_id', ESI_CLIENT_ID]
     ])
-  }).then(function(response) {
-    return response && response.status >= 200 && response.status < 300 &&
-      response.redirected !== true;
+  }, function(response) {
+    if (!response || response.status < 200 || response.status >= 300 ||
+        response.redirected === true) {
+      throw {error: 'transient'};
+    }
+    return true;
   }).catch(function() {
     return false;
   });
@@ -1079,7 +981,7 @@ function HandleLogout(expected) {
     if (expected && expected.sessionId != null && state.revision !== expected.sessionId) {
       return {ok: false, error: 'stale'};
     }
-    var credentials = NormalizeStoredCredentials(state.credentials);
+    var credentials = state.credentials;
     if (StoredCredentialsEmpty(credentials)) {
       return {ok: true};
     }
