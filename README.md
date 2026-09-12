@@ -8,7 +8,9 @@ This is an extension for Chrome to re-add the old 'radar' (location tracking) fe
 
 This is an incomplete Firefox development port. AMO data declarations, privacy corrections, and OAuth review are pending. `data_collection_permissions` is intentionally absent from `manifest.json` until those declarations are reviewed; this port is not ready for AMO submission.
 
-Authentication uses Firefox Identity Authorization Code with PKCE and the registered public client; no client secret is bundled. Local sign-out is independent; public-client server revocation is best-effort and remains unverified against EVE's confidential-client guidance. JWT validation and live authentication are pending.
+Authentication uses Firefox Identity Authorization Code with PKCE and the registered public client; no client secret is bundled. Public-client server revocation is best-effort and remains unverified against EVE's confidential-client guidance. JWT validation runs in the background; live authentication and Firefox smoke checks remain pending.
+
+The background owns the refresh token, verification, and credential storage. DOTLAN pages receive only a verified, unexpired access-token session for tracking and waypoints; if the background is unavailable, authenticated actions pause and the UI offers **Retry**. Sign-out is reported complete only after local credential clearing succeeds. Older development credentials may require a fresh sign-in.
 
 To install it temporarily in Firefox desktop:
 

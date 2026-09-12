@@ -3,9 +3,7 @@
  */
 function addWaypoint(location, asDestination) {
   var actionSession = GetSessionSnapshot();
-  if (!actionSession || typeof actionSession.token != 'string' || actionSession.token.length == 0 ||
-      typeof actionSession.refreshToken != 'string' || actionSession.refreshToken.length == 0 ||
-      actionSession.clientId !== ESI_CLIENT_ID) {
+  if (!actionSession || typeof actionSession.token != 'string' || actionSession.token.length == 0) {
     console.log('Waypoint request failed');
     return Promise.resolve();
   }
@@ -16,29 +14,24 @@ function addWaypoint(location, asDestination) {
   },
   )
   .then( (response) => {
-    if (!SessionsMatch(actionSession, GetSessionSnapshot())) {
-      throw {error: 'stale'};
-    }
-    return GetVerifiedSessionFor(actionSession).then(function(verified) {
-      return SessionUseIsCurrent(verified).then(function(isCurrent) {
+    return SessionUseIsCurrent(actionSession).then(function(isCurrent) {
         if (!isCurrent) {
           throw {error: 'stale'};
         }
-        return {destination: response.data['systems'][0]['id'], verified: verified};
-      });
+        return {destination: response.data['systems'][0]['id']};
     });
   })
   .then( (destination) => {
-    return SessionUseIsCurrent(destination.verified).then(function(isCurrent) {
+    return SessionUseIsCurrent(actionSession).then(function(isCurrent) {
       if (!isCurrent) {
         throw {error: 'stale'};
       }
       return axios({
         method: 'post',
         url: 'https://esi.evetech.net/latest/ui/autopilot/waypoint/?language=en&add_to_beginning=false&clear_other_waypoints='+asDestination+'&destination_id='+destination.destination,
-        headers: {Authorization: 'Bearer '+destination.verified.session.token}
+        headers: {Authorization: 'Bearer '+actionSession.token}
       }).then(function() {
-        return destination.verified;
+        return actionSession;
       });
     });
   })
@@ -47,7 +40,7 @@ function addWaypoint(location, asDestination) {
       if (!isCurrent) {
         throw {error: 'stale'};
       }
-    if (radarTrackingEnabled){
+    if (radarTrackingEnabled && LocationStateIsCurrent(verified)){
       var waypointString = '';
       if (asDestination) {
         waypointString = ':'+location.replace(/ /gi, '_');
@@ -80,6 +73,9 @@ function addWaypoint(location, asDestination) {
  * Removes waypoint from DOTLAN map, note that there is no way at this time to remove it from EVE client
  */
 function removeWaypoint(location) {
+  if (!LocationStateIsCurrent(GetSessionSnapshot())) {
+    return;
+  }
   var waypointString = '';
   var waypointArray = window.location.pathname.split(':');
   var i = 1;
@@ -190,7 +186,7 @@ function addRadarMenuOptions(menu) {
  * We use it to add the menu options when needed
  */
 function handleMutation(records) {
-  if (refreshToken == null){
+  if (GetSessionSnapshot() == null){
     return;
   }
   for (record in records) {

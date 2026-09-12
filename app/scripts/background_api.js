@@ -12,8 +12,12 @@ var esiJwksCache = null;
 var esiJwksFetchPromise = null;
 var activeAuthAttempt = null;
 var credentialMutationQueue = Promise.resolve();
-var credentialMutationGeneration = 0;
-var credentialMutationsPending = [];
+var knownCredentials = null;
+var sessionRevision = 0;
+var verifiedSession = null;
+var sharedRefreshPromise = null;
+var refreshBackoff = null;
+var logoutSession = null;
 
 function RespondOnce(sendResponse) {
   var responseSent = false;
@@ -409,40 +413,14 @@ function VerifyStoredToken(credentials) {
       credentials.clientId !== ESI_CLIENT_ID) {
     return Promise.resolve({error: 'invalid_token'});
   }
-  return ReadStoredCredentials()
-    .then(function(current) {
-      if (!StoredCredentialsMatch(current, credentials)) {
-        return {error: 'stale'};
-      }
-      return CredentialInvalidationExists(credentials)
-        .then(function(invalidated) {
-          if (invalidated) {
-            return {error: 'stale'};
-          }
-          return ValidateAccessToken(credentials.token)
-            .then(function(claims) {
-              return ReadStoredCredentials()
-                .then(function(currentAfterValidation) {
-                  if (!StoredCredentialsMatch(currentAfterValidation, credentials)) {
-                    return {error: 'stale'};
-                  }
-                  return CredentialInvalidationExists(credentials)
-                    .then(function(invalidatedAfterValidation) {
-                      if (invalidatedAfterValidation) {
-                        return {error: 'stale'};
-                      }
-                      if (!ValidateAccessTokenClaims(claims)) {
-                        return {error: 'invalid_token'};
-                      }
-                      return {
-                        characterID: claims.sub.split(':')[2],
-                        characterName: claims.name,
-                        exp: claims.exp
-                      };
-                    });
-                });
-            });
-        });
+  return ValidateAccessToken(credentials.token)
+    .then(function(claims) {
+      return {
+        characterID: claims.sub.split(':')[2],
+        characterName: claims.name,
+        exp: claims.exp,
+        claims: claims
+      };
     })
     .catch(function(error) {
       if (error && (error.error == 'stale' || error.error == 'invalid_token' ||
@@ -492,7 +470,8 @@ function RequestToken(body, refreshTokenOptional) {
             return result;
           }
           return ValidateAccessToken(result.access_token)
-            .then(function() {
+            .then(function(claims) {
+              result.claims = claims;
               return result;
             })
             .catch(function(error) {
@@ -510,6 +489,15 @@ function RequestToken(body, refreshTokenOptional) {
 
 function NormalizeStoredCredentials(items) {
   items = items || {};
+  if (Object.prototype.hasOwnProperty.call(items, 'token') ||
+      Object.prototype.hasOwnProperty.call(items, 'refreshToken') ||
+      Object.prototype.hasOwnProperty.call(items, 'clientId')) {
+    return {
+      token: (typeof items.token == 'undefined') ? null : items.token,
+      refreshToken: (typeof items.refreshToken == 'undefined') ? null : items.refreshToken,
+      clientId: (typeof items.clientId == 'undefined') ? null : items.clientId
+    };
+  }
   return {
     token: (typeof items.radarToken == 'undefined') ? null : items.radarToken,
     refreshToken: (typeof items.radarRefreshToken == 'undefined') ? null : items.radarRefreshToken,
@@ -558,210 +546,317 @@ function WriteStoredCredentials(credentials) {
 }
 
 function StoredCredentialsMatch(actual, expected) {
-  return actual.token == expected.token && actual.refreshToken == expected.refreshToken &&
-    actual.clientId == expected.clientId;
+  return actual != null && expected != null && actual.token === expected.token &&
+    actual.refreshToken === expected.refreshToken && actual.clientId === expected.clientId;
 }
 
 function StoredCredentialsEmpty(credentials) {
-  return credentials.token == null && credentials.refreshToken == null && credentials.clientId == null;
+  return credentials != null && credentials.token == null && credentials.refreshToken == null &&
+    credentials.clientId == null;
 }
 
-function CredentialsHaveValue(credentials) {
-  return credentials && (credentials.token != null || credentials.refreshToken != null ||
-    credentials.clientId != null);
-}
-
-function CredentialMarkerKey(credentials) {
-  var value = [credentials.token || '', credentials.refreshToken || '', credentials.clientId || ''].join('\u0000');
-  var firstHash = 2166136261;
-  var secondHash = 2246822519;
-  var thirdHash = 3266489917;
-  var fourthHash = 668265263;
-  for (var i = 0; i < value.length; i++) {
-    var code = value.charCodeAt(i);
-    firstHash = Math.imul(firstHash ^ code, 16777619);
-    secondHash = Math.imul(secondHash ^ code, 2246822519);
-    thirdHash = Math.imul(thirdHash ^ code, 3266489917);
-    fourthHash = Math.imul(fourthHash ^ code, 668265263);
-  }
-  return 'radarInvalidatedSession_' + (firstHash >>> 0).toString(16) +
-    (secondHash >>> 0).toString(16) + (thirdHash >>> 0).toString(16) +
-    (fourthHash >>> 0).toString(16);
-}
-
-function CredentialInvalidationExists(credentials) {
-  if (!CredentialsHaveValue(credentials)) {
-    return Promise.resolve(false);
-  }
-  return new Promise(function(resolve, reject) {
-    try {
-      chrome.storage.local.get(CredentialMarkerKey(credentials), function(items) {
-        var lastError = chrome.runtime.lastError;
-        if (lastError) {
-          reject({error: 'transient'});
-          return;
-        }
-        resolve(items && items[CredentialMarkerKey(credentials)] === true);
-      });
-    }
-    catch (error) {
-      reject({error: 'transient'});
-    }
+function QueueCredentialMutation(operation) {
+  var result = credentialMutationQueue.then(operation).catch(function(error) {
+    return error && error.error ? error : {error: 'transient'};
   });
+  credentialMutationQueue = result.then(function() {}, function() {});
+  return result;
 }
 
-function SetCredentialInvalidation(credentials, value) {
-  if (!CredentialsHaveValue(credentials)) {
-    return;
-  }
-  var values = {};
-  values[CredentialMarkerKey(credentials)] = value;
-  try {
-    chrome.storage.local.set(values, function() {
-      var lastError = chrome.runtime.lastError;
-      if (lastError) {
-        return;
-      }
-    });
-  }
-  catch (error) {
-    return;
-  }
+function LogoutReservationMatches(expected) {
+  return logoutSession != null && StoredCredentialsMatch(logoutSession, expected);
 }
 
-function ClearCredentialInvalidation(credentials) {
-  if (!CredentialsHaveValue(credentials)) {
-    return Promise.resolve();
-  }
-  return new Promise(function(resolve, reject) {
-    var values = {};
-    values[CredentialMarkerKey(credentials)] = null;
-    try {
-      chrome.storage.local.set(values, function() {
-        var lastError = chrome.runtime.lastError;
-        if (lastError) {
-          reject({error: 'transient'});
-          return;
-        }
-        resolve();
-      });
-    }
-    catch (error) {
-      reject({error: 'transient'});
-    }
-  });
-}
-
-function EnqueueCredentialMutation(operation, kind, expected) {
-  var operationGeneration = credentialMutationGeneration;
-  var pendingMutation = {kind: kind, expected: expected};
-  credentialMutationsPending.push(pendingMutation);
-  var result = credentialMutationQueue.then(function() {
-    if (operationGeneration != credentialMutationGeneration) {
-      return {error: 'stale'};
-    }
-    return operation(operationGeneration);
-  }).catch(function() {
-    return {error: 'transient'};
-  });
-  credentialMutationQueue = result.then(function(value) {
-    credentialMutationsPending.splice(credentialMutationsPending.indexOf(pendingMutation), 1);
-    return value;
-  });
-  return credentialMutationQueue;
-}
-
-function QueueCredentialWrite(credentials, expected, allowCleared) {
+function QueueCredentialWrite(credentials, expected) {
   if (!credentials || typeof credentials.token != 'string' || credentials.token.length == 0 ||
       typeof credentials.refreshToken != 'string' || credentials.refreshToken.length == 0 ||
-      credentials.clientId != ESI_CLIENT_ID) {
-    return Promise.resolve({error: 'transient'});
+      credentials.clientId !== ESI_CLIENT_ID) {
+    return Promise.resolve({error: 'invalid_token'});
   }
-  return EnqueueCredentialMutation(function(operationGeneration) {
-    return ReadStoredCredentials()
-      .then(function(current) {
-        if (!StoredCredentialsMatch(current, expected) && !(allowCleared && StoredCredentialsEmpty(current))) {
+  return QueueCredentialMutation(function() {
+    if (LogoutReservationMatches(expected)) {
+      return {error: 'stale'};
+    }
+    return ReadStoredCredentials().then(function(current) {
+      if (!StoredCredentialsMatch(current, expected) || LogoutReservationMatches(expected)) {
+        return {error: 'stale'};
+      }
+      return ValidateAccessToken(credentials.token).then(function(details) {
+        if (LogoutReservationMatches(expected)) {
           return {error: 'stale'};
         }
-        return CredentialInvalidationExists(expected)
-          .then(function(invalidated) {
-            if (invalidated) {
-              return {error: 'stale'};
-            }
-            return ValidateAccessToken(credentials.token)
-              .then(function() {
-                if (operationGeneration != credentialMutationGeneration) {
-                  return {error: 'stale'};
-                }
-                return ReadStoredCredentials()
-                  .then(function(currentAfterValidation) {
-                    if (operationGeneration != credentialMutationGeneration ||
-                        (!StoredCredentialsMatch(currentAfterValidation, expected) &&
-                          !(allowCleared && StoredCredentialsEmpty(currentAfterValidation)))) {
-                      return {error: 'stale'};
-                    }
-                    return CredentialInvalidationExists(expected)
-                      .then(function(invalidatedAfterValidation) {
-                        if (invalidatedAfterValidation || operationGeneration != credentialMutationGeneration) {
-                          return {error: 'stale'};
-                        }
-                        var parsedCredentials = ParseAccessToken(credentials.token);
-                        if (parsedCredentials == null || !ValidateAccessTokenClaims(parsedCredentials.payload)) {
-                          return {error: 'invalid_token'};
-                        }
-                        return WriteStoredCredentials(credentials)
-                          .then(function() {
-                            return CredentialInvalidationExists(expected)
-                              .then(function(invalidatedAfterWrite) {
-                                if (invalidatedAfterWrite || operationGeneration != credentialMutationGeneration) {
-                                  return WriteStoredCredentials({token: null, refreshToken: null, clientId: null})
-                                    .then(function() {
-                                      return {error: 'stale'};
-                                    });
-                                }
-                                return operationGeneration == credentialMutationGeneration ? {} : {error: 'stale'};
-                              });
-                          });
-                      });
-                  });
-              })
-              .catch(function(error) {
-                if (operationGeneration != credentialMutationGeneration) {
-                  return {error: 'stale'};
-                }
-                return NormalizeTokenValidationError(error);
+        return ReadStoredCredentials().then(function(currentAfterValidation) {
+          if (!StoredCredentialsMatch(currentAfterValidation, expected) ||
+              LogoutReservationMatches(expected)) {
+            return {error: 'stale'};
+          }
+          return WriteStoredCredentials(credentials).then(function() {
+            if (!LogoutReservationMatches(expected)) {
+              knownCredentials = NormalizeStoredCredentials(credentials);
+              sessionRevision += 1;
+              return CacheSession({credentials: credentials, revision: sessionRevision}, {
+                characterID: details.sub.split(':')[2],
+                characterName: details.name,
+                exp: details.exp
               });
+            }
+            return ReadStoredCredentials().then(function(afterWrite) {
+              if (!StoredCredentialsMatch(afterWrite, credentials)) {
+                return {error: 'stale'};
+              }
+              return WriteStoredCredentials({token: null, refreshToken: null, clientId: null})
+                .then(function() {
+                  knownCredentials = NormalizeStoredCredentials({});
+                  verifiedSession = null;
+                  sessionRevision += 1;
+                  return {error: 'stale'};
+                });
+            });
           });
+        });
+      }).catch(function(error) {
+        return NormalizeTokenValidationError(error);
       });
-  }, 'write', expected);
+    });
+  });
 }
 
-function QueueCredentialClear(expected, force) {
-  return EnqueueCredentialMutation(function(operationGeneration) {
+function QueueCredentialClear(expected) {
+  return QueueCredentialMutation(function() {
     return ReadStoredCredentials()
       .then(function(current) {
-        if (!force && !StoredCredentialsMatch(current, expected)) {
+        if (!StoredCredentialsMatch(current, expected)) {
           return {error: 'stale'};
         }
         return WriteStoredCredentials({token: null, refreshToken: null, clientId: null})
           .then(function() {
-            return operationGeneration == credentialMutationGeneration ? {} : {error: 'stale'};
+            knownCredentials = NormalizeStoredCredentials({});
+            verifiedSession = null;
+            sessionRevision += 1;
+            return {};
           });
       });
-  }, 'clear', expected);
-}
-
-function PendingCredentialWriteMatches(expected) {
-  return credentialMutationsPending.some(function(mutation) {
-    return mutation.kind == 'write' && StoredCredentialsMatch(mutation.expected, expected);
   });
 }
 
-function ActiveAuthAttemptMatches(expected) {
-  return activeAuthAttempt !== null &&
-    activeAuthAttempt.initialToken == expected.token &&
-    activeAuthAttempt.initialRefreshToken == expected.refreshToken &&
-    activeAuthAttempt.initialClientId == expected.clientId;
+function ReadSessionState() {
+  return ReadStoredCredentials().then(function(credentials) {
+    if (knownCredentials == null || !StoredCredentialsMatch(knownCredentials, credentials)) {
+      knownCredentials = NormalizeStoredCredentials(credentials);
+      sessionRevision += 1;
+      verifiedSession = null;
+      if (refreshBackoff != null && !StoredCredentialsMatch(refreshBackoff.credentials, credentials)) {
+        refreshBackoff = null;
+      }
+      if (logoutSession != null && !StoredCredentialsMatch(logoutSession, credentials)) {
+        logoutSession = null;
+      }
+    }
+    return {credentials: credentials, revision: sessionRevision};
+  });
+}
+
+function SessionView(state, details) {
+  var characterID = details.characterID;
+  var characterName = details.characterName;
+  if (typeof characterID == 'undefined' && typeof details.sub == 'string') {
+    characterID = details.sub.split(':')[2];
+  }
+  if (typeof characterName == 'undefined') {
+    characterName = details.name;
+  }
+  return {
+    token: state.credentials.token,
+    characterID: characterID,
+    characterName: characterName,
+    exp: details.exp,
+    sessionId: state.revision
+  };
+}
+
+function CacheSession(state, details) {
+  verifiedSession = {
+    credentials: NormalizeStoredCredentials(state.credentials),
+    revision: state.revision,
+    view: SessionView(state, details)
+  };
+  return verifiedSession.view;
+}
+
+function VerifyCurrentSession(state) {
+  if (verifiedSession != null &&
+      verifiedSession.revision == state.revision &&
+      StoredCredentialsMatch(verifiedSession.credentials, state.credentials) &&
+      verifiedSession.view.exp > Date.now() / 1000) {
+    return Promise.resolve(verifiedSession.view);
+  }
+  return VerifyStoredToken(state.credentials).then(function(details) {
+    if (details.error) {
+      throw details;
+    }
+    return ReadSessionState().then(function(current) {
+      if (current.revision != state.revision ||
+          !StoredCredentialsMatch(current.credentials, state.credentials) ||
+          details.exp <= Date.now() / 1000) {
+        throw {error: 'stale'};
+      }
+      return CacheSession(current, details);
+    });
+  });
+}
+
+function SetRefreshBackoff(state) {
+  if (knownCredentials != null && StoredCredentialsMatch(knownCredentials, state.credentials)) {
+    refreshBackoff = {
+      credentials: NormalizeStoredCredentials(state.credentials),
+      revision: state.revision,
+      retryAt: Date.now() + 2000
+    };
+  }
+}
+
+function ClearCurrentSession(expected) {
+  return ReadSessionState().then(function(state) {
+    if (!StoredCredentialsMatch(state.credentials, expected)) {
+      return {error: 'stale'};
+    }
+    logoutSession = NormalizeStoredCredentials(expected);
+    if (activeAuthAttempt != null &&
+        StoredCredentialsMatch(activeAuthAttempt.initialCredentials, expected)) {
+      activeAuthAttempt = null;
+    }
+    return QueueCredentialClear(expected).then(function(result) {
+      if (result && result.error) {
+        return result;
+      }
+      return {error: 'invalid_token'};
+    });
+  });
+}
+
+function RefreshCurrentSession(state) {
+  if (refreshBackoff != null &&
+      refreshBackoff.revision == state.revision &&
+      StoredCredentialsMatch(refreshBackoff.credentials, state.credentials) &&
+      refreshBackoff.retryAt > Date.now()) {
+    return Promise.resolve({error: 'transient'});
+  }
+  if (sharedRefreshPromise != null &&
+      sharedRefreshPromise.revision == state.revision &&
+      StoredCredentialsMatch(sharedRefreshPromise.credentials, state.credentials)) {
+    return sharedRefreshPromise.promise;
+  }
+  var pending = {
+    credentials: NormalizeStoredCredentials(state.credentials),
+    revision: state.revision,
+    promise: null
+  };
+  pending.promise = RequestToken(new URLSearchParams([
+    ['grant_type', 'refresh_token'],
+    ['refresh_token', state.credentials.refreshToken],
+    ['client_id', ESI_CLIENT_ID]
+  ]), true).then(function(result) {
+    if (result.error) {
+      if (result.error == 'invalid_grant') {
+        return ClearCurrentSession(state.credentials);
+      }
+      if (result.error == 'invalid_token') {
+        return ClearCurrentSession(state.credentials);
+      }
+      if (result.error == 'transient') {
+        SetRefreshBackoff(state);
+      }
+      return result;
+    }
+    var replacement = {
+      token: result.access_token,
+      refreshToken: Object.prototype.hasOwnProperty.call(result, 'refresh_token') ?
+        result.refresh_token : state.credentials.refreshToken,
+      clientId: ESI_CLIENT_ID
+    };
+    return QueueCredentialWrite(replacement, state.credentials).then(function(stored) {
+      if (stored.error) {
+        if (stored.error == 'invalid_token') {
+          return ClearCurrentSession(state.credentials);
+        }
+        return stored;
+      }
+      return ReadSessionState().then(function(current) {
+        if (!StoredCredentialsMatch(current.credentials, replacement)) {
+          return {error: 'stale'};
+        }
+        refreshBackoff = null;
+        return CacheSession(current, {
+          characterID: result.claims.sub.split(':')[2],
+          characterName: result.claims.name,
+          exp: result.claims.exp
+        });
+      });
+    });
+  }).catch(function(error) {
+    return error && error.error ? error : {error: 'transient'};
+  });
+  sharedRefreshPromise = pending;
+  pending.promise = pending.promise.then(function(result) {
+    if (sharedRefreshPromise === pending) {
+      sharedRefreshPromise = null;
+    }
+    return result;
+  }, function(error) {
+    if (sharedRefreshPromise === pending) {
+      sharedRefreshPromise = null;
+    }
+    return error && error.error ? error : {error: 'transient'};
+  });
+  return pending.promise;
+}
+
+function ResolveSession(state, allowRefresh) {
+  var credentials = state.credentials;
+  if (StoredCredentialsEmpty(credentials)) {
+    return Promise.resolve({error: 'signed_out'});
+  }
+  if (credentials.clientId !== ESI_CLIENT_ID) {
+    return QueueCredentialClear(credentials).then(function(result) {
+      return result.error ? result : {error: 'signed_out'};
+    });
+  }
+  if (typeof credentials.refreshToken != 'string' || credentials.refreshToken.length == 0) {
+    return ClearCurrentSession(credentials);
+  }
+  if (typeof credentials.token != 'string' || credentials.token.length == 0) {
+    return allowRefresh ? RefreshCurrentSession(state) : Promise.resolve({error: 'invalid_token'});
+  }
+  return VerifyCurrentSession(state).then(function(session) {
+    return session;
+  }, function(error) {
+    if (error && error.error == 'transient') {
+      return error;
+    }
+    if (error && error.error == 'stale') {
+      return error;
+    }
+    if (allowRefresh) {
+      return RefreshCurrentSession(state);
+    }
+    return ClearCurrentSession(credentials);
+  });
+}
+
+function GetSession(request) {
+  return ReadSessionState().then(function(state) {
+    if (request && request.expectedToken != null &&
+        state.credentials.token !== request.expectedToken) {
+      return {error: 'stale'};
+    }
+    if (request && request.expectedSessionId != null &&
+        state.revision !== request.expectedSessionId) {
+      return {error: 'stale'};
+    }
+    return ResolveSession(state, true);
+  }).catch(function(error) {
+    return error && error.error ? error : {error: 'transient'};
+  });
 }
 
 function ValidateAuthRedirect(responseUrl, redirectUri, state) {
@@ -826,21 +921,29 @@ function LaunchAuthFlow(attempt, authUrl) {
 }
 
 function StoreAuthCredentials(attempt, payload) {
-  return new Promise(function(resolve) {
-    if (activeAuthAttempt !== attempt) {
-      resolve({error: 'stale'});
-      return;
+  if (activeAuthAttempt !== attempt) {
+    return Promise.resolve({error: 'stale'});
+  }
+  return QueueCredentialWrite({
+    token: payload.access_token,
+    refreshToken: payload.refresh_token,
+    clientId: ESI_CLIENT_ID
+  }, attempt.initialCredentials).then(function(result) {
+    return activeAuthAttempt === attempt ? result : {error: 'stale'};
+  }).then(function(result) {
+    if (result.error) {
+      return result;
     }
-    QueueCredentialWrite({
-      token: payload.access_token,
-      refreshToken: payload.refresh_token,
-      clientId: ESI_CLIENT_ID
-    }, {
-      token: attempt.initialToken,
-      refreshToken: attempt.initialRefreshToken,
-      clientId: attempt.initialClientId
-    }, true).then(function(result) {
-      resolve(activeAuthAttempt === attempt ? result : {error: 'stale'});
+    return ReadSessionState().then(function(state) {
+      if (activeAuthAttempt !== attempt ||
+          !StoredCredentialsMatch(state.credentials, {
+            token: payload.access_token,
+            refreshToken: payload.refresh_token,
+            clientId: ESI_CLIENT_ID
+          })) {
+        return {error: 'stale'};
+      }
+      return CacheSession(state, payload.claims);
     });
   });
 }
@@ -852,9 +955,7 @@ function FinishAuthAttempt(attempt) {
   attempt.state = null;
   attempt.verifier = null;
   attempt.redirectUri = null;
-  attempt.initialToken = null;
-  attempt.initialRefreshToken = null;
-  attempt.initialClientId = null;
+  attempt.initialCredentials = null;
 }
 
 function RunAuthAttempt(attempt, respond) {
@@ -933,55 +1034,73 @@ function StartAuth(sendResponse) {
 
   var attempt = {state: null, verifier: null, redirectUri: redirectUri};
   activeAuthAttempt = attempt;
-  chrome.storage.local.get(['radarToken', 'radarRefreshToken', 'radarClientId'], function(items) {
-    var lastError = chrome.runtime.lastError;
-    if (lastError) {
+  ReadSessionState()
+    .then(function(state) {
+      if (activeAuthAttempt !== attempt) {
+        throw {error: 'stale'};
+      }
+      attempt.initialCredentials = NormalizeStoredCredentials(state.credentials);
+      RunAuthAttempt(attempt, respond);
+    })
+    .catch(function(error) {
       FinishAuthAttempt(attempt);
-      respond({error: 'transient'});
-      return;
-    }
-    items = items || {};
-    attempt.initialToken = (typeof items.radarToken == 'undefined') ? null : items.radarToken;
-    attempt.initialRefreshToken = (typeof items.radarRefreshToken == 'undefined') ? null : items.radarRefreshToken;
-    attempt.initialClientId = (typeof items.radarClientId == 'undefined') ? null : items.radarClientId;
-    if (activeAuthAttempt !== attempt) {
-      FinishAuthAttempt(attempt);
-      respond({error: 'stale'});
-      return;
-    }
-    var initialCredentials = {
-      token: attempt.initialToken,
-      refreshToken: attempt.initialRefreshToken,
-      clientId: attempt.initialClientId
-    };
-    CredentialInvalidationExists(initialCredentials)
-      .then(function(invalidated) {
-        if (activeAuthAttempt !== attempt) {
-          throw {error: 'stale'};
-        }
-        if (!invalidated) {
-          return null;
-        }
-        return QueueCredentialClear(initialCredentials, false)
-          .then(function(result) {
-            if (result && result.error == 'transient') {
-              throw result;
-            }
-            return ClearCredentialInvalidation(initialCredentials);
-          });
-      })
-      .then(function() {
-        if (activeAuthAttempt !== attempt) {
-          throw {error: 'stale'};
-        }
-        RunAuthAttempt(attempt, respond);
-      })
-      .catch(function(error) {
-        FinishAuthAttempt(attempt);
-        respond(error && error.error ? error : {error: 'transient'});
-      });
-  });
+      respond(error && error.error ? error : {error: 'transient'});
+    });
   return true;
+}
+
+function RevokeRemoteToken(token, tokenTypeHint) {
+  if (typeof token != 'string' || token.length == 0) {
+    return Promise.resolve(false);
+  }
+  return FetchWithTimeout(ESI_REVOKE_URL, {
+    method: 'post',
+    redirect: 'error',
+    credentials: 'omit',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: new URLSearchParams([
+      ['token_type_hint', tokenTypeHint],
+      ['token', token],
+      ['client_id', ESI_CLIENT_ID]
+    ])
+  }).then(function(response) {
+    return response && response.status >= 200 && response.status < 300 &&
+      response.redirected !== true;
+  }).catch(function() {
+    return false;
+  });
+}
+
+function HandleLogout(expected) {
+  return ReadSessionState().then(function(state) {
+    if (expected && expected.token != null && state.credentials.token !== expected.token) {
+      return {ok: false, error: 'stale'};
+    }
+    if (expected && expected.sessionId != null && state.revision !== expected.sessionId) {
+      return {ok: false, error: 'stale'};
+    }
+    var credentials = NormalizeStoredCredentials(state.credentials);
+    if (StoredCredentialsEmpty(credentials)) {
+      return {ok: true};
+    }
+    logoutSession = credentials;
+    if (activeAuthAttempt != null &&
+        StoredCredentialsMatch(activeAuthAttempt.initialCredentials, credentials)) {
+      activeAuthAttempt = null;
+    }
+    return QueueCredentialClear(credentials).then(function(result) {
+      if (result && result.error) {
+        return {ok: false, error: result.error};
+      }
+      Promise.all([
+        RevokeRemoteToken(credentials.token, 'access_token'),
+        RevokeRemoteToken(credentials.refreshToken, 'refresh_token')
+      ]).then(function() {}, function() {});
+      return {ok: true};
+    });
+  }).catch(function(error) {
+    return {ok: false, error: error && error.error ? error.error : 'transient'};
+  });
 }
 
 chrome.runtime.onMessage.addListener(
@@ -992,106 +1111,20 @@ chrome.runtime.onMessage.addListener(
     if (request.contentScriptQuery == 'startAuth') {
       return StartAuth(sendResponse);
     }
-    else if (request.contentScriptQuery == 'refreshToken') {
-      var refreshRespond = RespondOnce(sendResponse);
-      RequestToken(new URLSearchParams([
-        ['grant_type', 'refresh_token'],
-        ['refresh_token', request.tokenArg],
-        ['client_id', ESI_CLIENT_ID]
-      ]), true)
-      .then(function(result) {
-        refreshRespond(result);
+    else if (request.contentScriptQuery == 'getSession') {
+      var sessionRespond = RespondOnce(sendResponse);
+      GetSession(request).then(function(result) {
+        sessionRespond(result);
       });
       return true;
     }
-    else if (request.contentScriptQuery == 'verifyToken') {
-      var verifyRespond = RespondOnce(sendResponse);
-      VerifyStoredToken({
-        token: request.token,
-        refreshToken: request.refreshToken,
-        clientId: request.clientId
-      }).then(function(result) {
-        verifyRespond(result);
-      });
-      return true;
-    }
-    else if (request.contentScriptQuery == 'storeCredentials') {
-      var storeRespond = RespondOnce(sendResponse);
-      QueueCredentialWrite({
-        token: request.token,
-        refreshToken: request.refreshToken,
-        clientId: ESI_CLIENT_ID
-      }, {
+    else if (request.contentScriptQuery == 'logout') {
+      var logoutRespond = RespondOnce(sendResponse);
+      HandleLogout({
         token: request.expectedToken,
-        refreshToken: request.expectedRefreshToken,
-        clientId: request.expectedClientId
+        sessionId: request.expectedSessionId
       }).then(function(result) {
-        storeRespond(result);
-      });
-      return true;
-    }
-    else if (request.contentScriptQuery == 'clearCredentials') {
-      var clearRespond = RespondOnce(sendResponse);
-      QueueCredentialClear({
-        token: request.expectedToken,
-        refreshToken: request.expectedRefreshToken,
-        clientId: request.expectedClientId
-      }).then(function(result) {
-        clearRespond(result);
-      });
-      return true;
-    }
-    else if (request.contentScriptQuery == 'revokeToken') {
-      var revokeCredentials = {
-        token: request.token,
-        refreshToken: request.refreshToken,
-        clientId: (typeof request.clientId == 'undefined') ? ESI_CLIENT_ID : request.clientId
-      };
-      var ownsActiveAuthAttempt = ActiveAuthAttemptMatches(revokeCredentials);
-      var forceCredentialClear = PendingCredentialWriteMatches(revokeCredentials) ||
-        ownsActiveAuthAttempt;
-      if (ownsActiveAuthAttempt) {
-        activeAuthAttempt = null;
-      }
-      if (forceCredentialClear) {
-        credentialMutationGeneration += 1;
-      }
-      SetCredentialInvalidation(revokeCredentials, true);
-      var respond = RespondOnce(sendResponse);
-      var clearCredentials = QueueCredentialClear(revokeCredentials, forceCredentialClear);
-      var revoke = function(tokenToRevoke, tokenTypeHint) {
-        return Promise.resolve()
-          .then(function() {
-            return fetch(ESI_REVOKE_URL, {
-              method: 'post',
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded'
-              },
-              body: new URLSearchParams([
-                ['token_type_hint', tokenTypeHint],
-                ['token', tokenToRevoke],
-                ['client_id', ESI_CLIENT_ID]
-              ])
-            });
-          })
-          .then(function(response) {
-            return response.status >= 200 && response.status < 300;
-          })
-          .catch(function() {
-            return false;
-          });
-      };
-
-      Promise.all([
-        clearCredentials,
-        revoke(request.token, 'access_token'),
-        revoke(request.refreshToken, 'refresh_token')
-      ])
-      .then(function(results) {
-        respond(results[1] && results[2]);
-      })
-      .catch(function() {
-        respond(false);
+        logoutRespond(result);
       });
       return true;
     }
