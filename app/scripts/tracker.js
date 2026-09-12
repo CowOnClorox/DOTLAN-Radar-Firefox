@@ -479,14 +479,15 @@ function RevokeToken() {
   var tokenToRevoke = token;
   var refreshTokenToRevoke = refreshToken;
   var clientIdToRevoke = credentialClientId;
-
-  loginAttemptGeneration += 1;
-  loginInProgress = false;
-  SetLogoutStateTopbar({
+  var credentialsToClear = {
     token: tokenToRevoke,
     refreshToken: refreshTokenToRevoke,
     clientId: clientIdToRevoke
-  }, false);
+  };
+
+  loginAttemptGeneration += 1;
+  loginInProgress = false;
+  SetLogoutStateTopbar(credentialsToClear);
 
   try {
     chrome.runtime.sendMessage(
@@ -495,12 +496,16 @@ function RevokeToken() {
       () => {
         var lastError = chrome.runtime.lastError;
         if (lastError) {
+          ClearCredentials_Promise(credentialsToClear)
+          .catch( () => {});
           return;
         }
       }
     );
   }
   catch (error) {
+    ClearCredentials_Promise(credentialsToClear)
+    .catch( () => {});
     return;
   }
 }
@@ -545,8 +550,12 @@ function radarTrackingTrigger() {
  * helper function to get the data we have stored in chrome.storage.local for working across tabs and on new pages
  */
 function syncData() {
+  var syncGeneration = loginAttemptGeneration;
   return localGet_Promise(['radarToken', 'radarRefreshToken', 'radarClientId'])
   .then( (items) => {
+    if (syncGeneration != loginAttemptGeneration) {
+      throw {error: 'stale'};
+    }
     var storedToken = (typeof items['radarToken'] == 'undefined') ? null : items['radarToken'];
     var storedRefreshToken = (typeof items['radarRefreshToken'] == 'undefined') ? null : items['radarRefreshToken'];
     var storedClientId = (typeof items['radarClientId'] == 'undefined') ? null : items['radarClientId'];
@@ -554,11 +563,10 @@ function syncData() {
       token = null;
       refreshToken = null;
       credentialClientId = null;
-      return CredentialMessage_Promise({
-        contentScriptQuery: 'clearCredentials',
-        expectedToken: storedToken,
-        expectedRefreshToken: storedRefreshToken,
-        expectedClientId: storedClientId
+      return ClearCredentials_Promise({
+        token: storedToken,
+        refreshToken: storedRefreshToken,
+        clientId: storedClientId
       });
     }
     token = storedToken;
@@ -608,6 +616,20 @@ const CredentialMessage_Promise = request => new Promise((resolve, reject) => {
     reject({error: 'transient'});
   }
 });
+
+function ClearCredentials_Promise(credentials) {
+  credentials = credentials || {
+    token: token,
+    refreshToken: refreshToken,
+    clientId: credentialClientId
+  };
+  return CredentialMessage_Promise({
+    contentScriptQuery: 'clearCredentials',
+    expectedToken: credentials.token,
+    expectedRefreshToken: credentials.refreshToken,
+    expectedClientId: credentials.clientId
+  });
+}
 
 function StartHeartbeat() {
   if (characterHeartbeat == null) {

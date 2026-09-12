@@ -7,7 +7,7 @@ var ESI_SCOPE = 'esi-location.read_location.v1 esi-ui.write_waypoint.v1';
 var activeAuthAttempt = null;
 var credentialMutationQueue = Promise.resolve();
 var credentialMutationGeneration = 0;
-var credentialMutationsPending = 0;
+var credentialMutationsPending = [];
 
 function RespondOnce(sendResponse) {
   var responseSent = false;
@@ -149,9 +149,10 @@ function StoredCredentialsEmpty(credentials) {
   return credentials.token == null && credentials.refreshToken == null && credentials.clientId == null;
 }
 
-function EnqueueCredentialMutation(operation) {
+function EnqueueCredentialMutation(operation, kind, expected) {
   var operationGeneration = credentialMutationGeneration;
-  credentialMutationsPending += 1;
+  var pendingMutation = {kind: kind, expected: expected};
+  credentialMutationsPending.push(pendingMutation);
   var result = credentialMutationQueue.then(function() {
     if (operationGeneration != credentialMutationGeneration) {
       return {error: 'stale'};
@@ -161,7 +162,7 @@ function EnqueueCredentialMutation(operation) {
     return {error: 'transient'};
   });
   credentialMutationQueue = result.then(function(value) {
-    credentialMutationsPending -= 1;
+    credentialMutationsPending.splice(credentialMutationsPending.indexOf(pendingMutation), 1);
     return value;
   });
   return credentialMutationQueue;
@@ -184,7 +185,7 @@ function QueueCredentialWrite(credentials, expected, allowCleared) {
             return operationGeneration == credentialMutationGeneration ? {} : {error: 'stale'};
           });
       });
-  });
+  }, 'write', expected);
 }
 
 function QueueCredentialClear(expected, force) {
@@ -199,7 +200,20 @@ function QueueCredentialClear(expected, force) {
             return operationGeneration == credentialMutationGeneration ? {} : {error: 'stale'};
           });
       });
+  }, 'clear', expected);
+}
+
+function PendingCredentialWriteMatches(expected) {
+  return credentialMutationsPending.some(function(mutation) {
+    return mutation.kind == 'write' && StoredCredentialsMatch(mutation.expected, expected);
   });
+}
+
+function ActiveAuthAttemptMatches(expected) {
+  return activeAuthAttempt !== null &&
+    activeAuthAttempt.initialToken == expected.token &&
+    activeAuthAttempt.initialRefreshToken == expected.refreshToken &&
+    activeAuthAttempt.initialClientId == expected.clientId;
 }
 
 function ValidateAuthRedirect(responseUrl, redirectUri, state) {
@@ -439,16 +453,17 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
     else if (request.contentScriptQuery == 'revokeToken') {
-      var hadActiveAuthAttempt = activeAuthAttempt !== null;
-      var forceCredentialClear = credentialMutationsPending > 0;
-      activeAuthAttempt = null;
-      credentialMutationGeneration += 1;
-      var respond = RespondOnce(sendResponse);
-      var clearCredentials = QueueCredentialClear({
+      var revokeCredentials = {
         token: request.token,
         refreshToken: request.refreshToken,
         clientId: (typeof request.clientId == 'undefined') ? ESI_CLIENT_ID : request.clientId
-      }, hadActiveAuthAttempt || forceCredentialClear);
+      };
+      var forceCredentialClear = PendingCredentialWriteMatches(revokeCredentials) ||
+        ActiveAuthAttemptMatches(revokeCredentials);
+      activeAuthAttempt = null;
+      credentialMutationGeneration += 1;
+      var respond = RespondOnce(sendResponse);
+      var clearCredentials = QueueCredentialClear(revokeCredentials, forceCredentialClear);
       var revoke = function(tokenToRevoke, tokenTypeHint) {
         return Promise.resolve()
           .then(function() {
