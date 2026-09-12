@@ -3,7 +3,13 @@ var ESI_REDIRECT_URI = 'https://fd9b2657a6e126c6265245caa1535e6e348a22c2.extensi
 var ESI_AUTHORIZE_URL = 'https://login.eveonline.com/v2/oauth/authorize';
 var ESI_TOKEN_URL = 'https://login.eveonline.com/v2/oauth/token';
 var ESI_REVOKE_URL = 'https://login.eveonline.com/v2/oauth/revoke';
+var ESI_METADATA_URL = 'https://login.eveonline.com/.well-known/oauth-authorization-server';
+var ESI_JWKS_ORIGIN = 'https://login.eveonline.com';
 var ESI_SCOPE = 'esi-location.read_location.v1 esi-ui.write_waypoint.v1';
+var ESI_FETCH_TIMEOUT_MS = 5000;
+var ESI_JWKS_CACHE_TTL_MS = 300000;
+var esiJwksCache = null;
+var esiJwksFetchPromise = null;
 var activeAuthAttempt = null;
 var credentialMutationQueue = Promise.resolve();
 var credentialMutationGeneration = 0;
@@ -43,7 +49,301 @@ function CreatePKCEParameters() {
         verifier: verifier,
         challenge: Base64UrlEncode(new Uint8Array(digest))
       };
+  });
+}
+
+function DecodeBase64Url(value) {
+  if (typeof value != 'string' || value.length == 0 ||
+      !/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 == 1) {
+    return null;
+  }
+  try {
+    var padded = value.replace(/-/g, '+').replace(/_/g, '/');
+    while (padded.length % 4 != 0) {
+      padded += '=';
+    }
+    var binary = atob(padded);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  }
+  catch (error) {
+    return null;
+  }
+}
+
+function DecodeJwtJson(value) {
+  var bytes = DecodeBase64Url(value);
+  if (bytes == null) {
+    return null;
+  }
+  try {
+    return JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes));
+  }
+  catch (error) {
+    return null;
+  }
+}
+
+function ParseAccessToken(token) {
+  if (typeof token != 'string') {
+    return null;
+  }
+  var parts = token.split('.');
+  if (parts.length != 3 || parts[0].length == 0 || parts[1].length == 0 || parts[2].length == 0) {
+    return null;
+  }
+  var header = DecodeJwtJson(parts[0]);
+  var payload = DecodeJwtJson(parts[1]);
+  var signature = DecodeBase64Url(parts[2]);
+  if (!header || typeof header != 'object' || Array.isArray(header) ||
+      !payload || typeof payload != 'object' || Array.isArray(payload) ||
+      signature == null || signature.length == 0 ||
+      (header.alg != 'RS256' && header.alg != 'ES256') ||
+      typeof header.kid != 'string' || header.kid.trim().length == 0) {
+    return null;
+  }
+  if (Object.prototype.hasOwnProperty.call(header, 'crit') &&
+      (!Array.isArray(header.crit) || header.crit.length != 0)) {
+    return null;
+  }
+  if (Object.prototype.hasOwnProperty.call(header, 'jku') ||
+      Object.prototype.hasOwnProperty.call(header, 'x5u') ||
+      Object.prototype.hasOwnProperty.call(header, 'jwk')) {
+    return null;
+  }
+  if (header.alg == 'ES256' && signature.length != 64) {
+    return null;
+  }
+  return {
+    header: header,
+    payload: payload,
+    signature: signature,
+    signingInput: new TextEncoder().encode(parts[0] + '.' + parts[1])
+  };
+}
+
+/* EVE metadata uses https://login.eveonline.com. EVE documents the trailing-slash
+ * and bare-host compatibility forms; the similar-looking "logineveonline.com"
+ * typo is intentionally not accepted. */
+function IsAcceptedIssuer(issuer) {
+  return issuer == 'https://login.eveonline.com/' ||
+    issuer == 'https://login.eveonline.com' || issuer == 'login.eveonline.com';
+}
+
+function ArrayContains(values, expected) {
+  return Array.isArray(values) && values.indexOf(expected) != -1;
+}
+
+function ValidateAccessTokenClaims(claims) {
+  var now = Date.now() / 1000;
+  if (!IsAcceptedIssuer(claims.iss) || !ArrayContains(claims.aud, ESI_CLIENT_ID) ||
+      !ArrayContains(claims.aud, 'EVE Online') ||
+      typeof claims.exp != 'number' || !isFinite(claims.exp) || claims.exp <= now ||
+      (Object.prototype.hasOwnProperty.call(claims, 'nbf') &&
+        (typeof claims.nbf != 'number' || !isFinite(claims.nbf) || claims.nbf > now)) ||
+      typeof claims.sub != 'string' || !/^CHARACTER:EVE:[0-9]+$/.test(claims.sub) ||
+      typeof claims.name != 'string' || claims.name.trim().length == 0 ||
+      !ArrayContains(claims.scp, 'esi-location.read_location.v1') ||
+      !ArrayContains(claims.scp, 'esi-ui.write_waypoint.v1')) {
+    return false;
+  }
+  return true;
+}
+
+function FetchWithTimeout(url, options) {
+  return new Promise(function(resolve, reject) {
+    var controller = null;
+    var requestOptions = options || {};
+    if (typeof AbortController == 'function') {
+      controller = new AbortController();
+      requestOptions.signal = controller.signal;
+    }
+    var settled = false;
+    var timeout = setTimeout(function() {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (controller) {
+        controller.abort();
+      }
+      reject({error: 'transient'});
+    }, ESI_FETCH_TIMEOUT_MS);
+    try {
+      Promise.resolve(fetch(url, requestOptions))
+        .then(function(response) {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timeout);
+          resolve(response);
+        })
+        .catch(function() {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timeout);
+          reject({error: 'transient'});
+        });
+    }
+    catch (error) {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        reject({error: 'transient'});
+      }
+    }
+  });
+}
+
+function FetchJson(url) {
+  return FetchWithTimeout(url, {redirect: 'error', credentials: 'omit'})
+    .then(function(response) {
+      if (!response || response.redirected === true || response.status < 200 || response.status >= 300 ||
+          typeof response.json != 'function') {
+        throw {error: 'transient'};
+      }
+      return Promise.resolve(response.json()).catch(function() {
+        throw {error: 'transient'};
+      });
     });
+}
+
+function IsTrustedJwkForToken(jwk, header) {
+  if (!jwk || typeof jwk != 'object' || Array.isArray(jwk) ||
+      typeof jwk.kid != 'string' || jwk.kid.length == 0 || jwk.kid != header.kid ||
+      jwk.alg != header.alg || jwk.use != 'sig' ||
+      (Object.prototype.hasOwnProperty.call(jwk, 'key_ops') &&
+        (!Array.isArray(jwk.key_ops) || jwk.key_ops.indexOf('verify') == -1))) {
+    return false;
+  }
+  if (header.alg == 'RS256') {
+    return jwk.kty == 'RSA' && typeof jwk.n == 'string' && jwk.n.length > 0 &&
+      typeof jwk.e == 'string' && jwk.e.length > 0;
+  }
+  return jwk.kty == 'EC' && jwk.crv == 'P-256' && typeof jwk.x == 'string' && jwk.x.length > 0 &&
+    typeof jwk.y == 'string' && jwk.y.length > 0;
+}
+
+function SelectVerificationJwk(jwks, header) {
+  if (!jwks || typeof jwks != 'object' || Array.isArray(jwks) || !Array.isArray(jwks.keys) ||
+      jwks.keys.length == 0 || jwks.keys.length > 32) {
+    return null;
+  }
+  var keysWithKid = jwks.keys.filter(function(jwk) {
+    return jwk && jwk.kid == header.kid;
+  });
+  if (keysWithKid.length != 1 || !IsTrustedJwkForToken(keysWithKid[0], header)) {
+    return null;
+  }
+  return keysWithKid[0];
+}
+
+function FetchJwks(forceRefresh) {
+  var now = Date.now();
+  if (forceRefresh) {
+    esiJwksCache = null;
+  }
+  if (!forceRefresh && esiJwksCache != null && esiJwksCache.expiresAt > now) {
+    return Promise.resolve(esiJwksCache.value);
+  }
+  if (esiJwksFetchPromise != null) {
+    return esiJwksFetchPromise;
+  }
+  var fetchPromise = FetchJson(ESI_METADATA_URL)
+    .then(function(metadata) {
+      if (!metadata || typeof metadata != 'object' || Array.isArray(metadata) ||
+          typeof metadata.jwks_uri != 'string') {
+        throw {error: 'transient'};
+      }
+      var jwksUrl;
+      try {
+        jwksUrl = new URL(metadata.jwks_uri);
+      }
+      catch (error) {
+        throw {error: 'transient'};
+      }
+      if (jwksUrl.protocol != 'https:' || jwksUrl.origin != ESI_JWKS_ORIGIN ||
+          jwksUrl.username != '' || jwksUrl.password != '' || jwksUrl.hash != '') {
+        throw {error: 'transient'};
+      }
+      return FetchJson(jwksUrl.toString());
+    })
+    .then(function(jwks) {
+      if (!jwks || typeof jwks != 'object' || Array.isArray(jwks) || !Array.isArray(jwks.keys) ||
+          jwks.keys.length == 0 || jwks.keys.length > 32) {
+        throw {error: 'transient'};
+      }
+      esiJwksCache = {value: jwks, expiresAt: Date.now() + ESI_JWKS_CACHE_TTL_MS};
+      return jwks;
+    });
+  esiJwksFetchPromise = fetchPromise.then(function(value) {
+    esiJwksFetchPromise = null;
+    return value;
+  }, function(error) {
+    esiJwksFetchPromise = null;
+    throw error && error.error ? error : {error: 'transient'};
+  });
+  return esiJwksFetchPromise;
+}
+
+function ImportVerificationKey(jwk, algorithm) {
+  var importAlgorithm = algorithm == 'RS256' ? {
+    name: 'RSASSA-PKCS1-v1_5',
+    hash: {name: 'SHA-256'}
+  } : {
+    name: 'ECDSA',
+    namedCurve: 'P-256'
+  };
+  return crypto.subtle.importKey('jwk', jwk, importAlgorithm, false, ['verify']);
+}
+
+function VerifyAccessTokenSignature(parsedToken, forceRefresh) {
+  return FetchJwks(forceRefresh)
+    .then(function(jwks) {
+      var jwk = SelectVerificationJwk(jwks, parsedToken.header);
+      if (jwk == null) {
+        return false;
+      }
+      return ImportVerificationKey(jwk, parsedToken.header.alg)
+        .then(function(key) {
+          var verifyAlgorithm = parsedToken.header.alg == 'RS256' ?
+            {name: 'RSASSA-PKCS1-v1_5'} : {name: 'ECDSA', hash: {name: 'SHA-256'}};
+          return crypto.subtle.verify(verifyAlgorithm, key, parsedToken.signature, parsedToken.signingInput);
+        })
+        .catch(function() {
+          return false;
+        });
+    });
+}
+
+function ValidateAccessToken(token) {
+  var parsedToken = ParseAccessToken(token);
+  if (parsedToken == null || !ValidateAccessTokenClaims(parsedToken.payload)) {
+    return Promise.reject({error: 'invalid_token'});
+  }
+  return VerifyAccessTokenSignature(parsedToken, false)
+    .then(function(valid) {
+      if (valid) {
+        return parsedToken.payload;
+      }
+      return VerifyAccessTokenSignature(parsedToken, true)
+        .then(function(rotatedValid) {
+          if (!rotatedValid) {
+            throw {error: 'invalid_token'};
+          }
+          return parsedToken.payload;
+        });
+    });
+}
+
+function NormalizeTokenValidationError(error) {
+  return error && error.error == 'transient' ? {error: 'transient'} : {error: 'invalid_token'};
 }
 
 function ClassifyTokenResponse(response, payload, refreshTokenOptional) {
@@ -69,7 +369,7 @@ function ClassifyTokenResponse(response, payload, refreshTokenOptional) {
 function RequestToken(body, refreshTokenOptional) {
   return Promise.resolve()
     .then(function() {
-      return fetch(ESI_TOKEN_URL, {
+      return FetchWithTimeout(ESI_TOKEN_URL, {
         method: 'post',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
@@ -80,7 +380,17 @@ function RequestToken(body, refreshTokenOptional) {
     .then(function(response) {
       return response.json()
         .then(function(payload) {
-          return ClassifyTokenResponse(response, payload, refreshTokenOptional);
+          var result = ClassifyTokenResponse(response, payload, refreshTokenOptional);
+          if (result.error) {
+            return result;
+          }
+          return ValidateAccessToken(result.access_token)
+            .then(function() {
+              return result;
+            })
+            .catch(function(error) {
+              return NormalizeTokenValidationError(error);
+            });
         })
         .catch(function() {
           return {error: 'transient'};
@@ -271,18 +581,44 @@ function QueueCredentialWrite(credentials, expected, allowCleared) {
             if (invalidated) {
               return {error: 'stale'};
             }
-            return WriteStoredCredentials(credentials)
+            return ValidateAccessToken(credentials.token)
               .then(function() {
-                return CredentialInvalidationExists(expected)
-                  .then(function(invalidatedAfterWrite) {
-                    if (invalidatedAfterWrite || operationGeneration != credentialMutationGeneration) {
-                      return WriteStoredCredentials({token: null, refreshToken: null, clientId: null})
-                        .then(function() {
-                          return {error: 'stale'};
-                        });
+                if (operationGeneration != credentialMutationGeneration) {
+                  return {error: 'stale'};
+                }
+                return ReadStoredCredentials()
+                  .then(function(currentAfterValidation) {
+                    if (operationGeneration != credentialMutationGeneration ||
+                        (!StoredCredentialsMatch(currentAfterValidation, expected) &&
+                          !(allowCleared && StoredCredentialsEmpty(currentAfterValidation)))) {
+                      return {error: 'stale'};
                     }
-                    return operationGeneration == credentialMutationGeneration ? {} : {error: 'stale'};
+                    return CredentialInvalidationExists(expected)
+                      .then(function(invalidatedAfterValidation) {
+                        if (invalidatedAfterValidation || operationGeneration != credentialMutationGeneration) {
+                          return {error: 'stale'};
+                        }
+                        return WriteStoredCredentials(credentials)
+                          .then(function() {
+                            return CredentialInvalidationExists(expected)
+                              .then(function(invalidatedAfterWrite) {
+                                if (invalidatedAfterWrite || operationGeneration != credentialMutationGeneration) {
+                                  return WriteStoredCredentials({token: null, refreshToken: null, clientId: null})
+                                    .then(function() {
+                                      return {error: 'stale'};
+                                    });
+                                }
+                                return operationGeneration == credentialMutationGeneration ? {} : {error: 'stale'};
+                              });
+                          });
+                      });
                   });
+              })
+              .catch(function(error) {
+                if (operationGeneration != credentialMutationGeneration) {
+                  return {error: 'stale'};
+                }
+                return NormalizeTokenValidationError(error);
               });
           });
       });
