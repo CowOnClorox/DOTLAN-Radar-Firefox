@@ -2,12 +2,19 @@
 var ESI_CLIENT_ID = 'f7b4d46e9ec2494481e8a40fd860540a';
 
 function StartLogin(event) {
-  if (event && event.preventDefault) {
+  if (!event || event.isTrusted !== true) {
+    if (event && event.preventDefault) {
+      event.preventDefault();
+    }
+    return false;
+  }
+  if (event.preventDefault) {
     event.preventDefault();
   }
   if (loginInProgress) {
     return false;
   }
+  var loginAttempt = ++loginAttemptGeneration;
   loginInProgress = true;
   reactiveData.signInText = 'Signing in...';
   try {
@@ -15,14 +22,20 @@ function StartLogin(event) {
       {contentScriptQuery: 'startAuth'},
       response => {
         var lastError = chrome.runtime.lastError;
+        if (loginAttempt != loginAttemptGeneration) {
+          return;
+        }
         loginInProgress = false;
         if (lastError || !response || response.error) {
           console.log('Authentication flow failed');
-          SetLogoutStateTopbar();
+          RestoreLoginState(loginAttempt);
           return;
         }
         syncData()
         .then( () => {
+          if (loginAttempt != loginAttemptGeneration) {
+            throw {error: 'stale'};
+          }
           if (token == null || refreshToken == null || credentialClientId != ESI_CLIENT_ID) {
             throw {error: 'transient'};
           }
@@ -33,18 +46,73 @@ function StartLogin(event) {
           reactiveData.signInLink = 'javascript:;';
         })
         .catch( () => {
+          if (loginAttempt != loginAttemptGeneration) {
+            return;
+          }
           console.log('Authentication setup failed');
-          SetLogoutStateTopbar();
+          RestoreLoginState(loginAttempt);
         });
       }
     );
   }
   catch (error) {
     loginInProgress = false;
+    if (loginAttempt != loginAttemptGeneration) {
+      return false;
+    }
     console.log('Authentication flow failed');
-    SetLogoutStateTopbar();
+    RestoreLoginState(loginAttempt);
   }
   return false;
+}
+
+function SetSignedInStateTopbar() {
+  reactiveData.signInText = 'Sign Out';
+  reactiveData.signInOnClick = RevokeToken;
+  reactiveData.signInLink = 'javascript:;';
+}
+
+function SetSignedOutStateTopbar() {
+  reactiveData.signInText = 'Sign in';
+  reactiveData.signInLink = 'javascript:;';
+  reactiveData.signInOnClick = StartLogin;
+  reactiveData.signInRole = '';
+  reactiveData.characterName = 'No character logged in';
+  reactiveData.charLocationDisplay = 'none';
+  reactiveData.notifierDisplay = 'none';
+  reactiveData.topbarContainerAnimation = 'slideIn 1s ease-out 0.5s 1 forwards';
+  reactiveData.topbarContainerAnimationModifier = 'slideIn 1s ease-out 0.5s 1 forwards';
+  reactiveData.characterPortrait = '';
+  if (reactiveData.trackingTriggerText == 'Stop Tracking') {
+    radarTrackingTrigger();
+  }
+  characterID = null;
+  token = null;
+  refreshToken = null;
+  credentialClientId = null;
+}
+
+function RestoreLoginState(loginAttempt) {
+  if (loginAttempt != loginAttemptGeneration) {
+    return;
+  }
+  syncData()
+    .then(function() {
+      if (loginAttempt != loginAttemptGeneration) {
+        return;
+      }
+      if (token != null && refreshToken != null && credentialClientId == ESI_CLIENT_ID) {
+        SetSignedInStateTopbar();
+      }
+      else {
+        SetSignedOutStateTopbar();
+      }
+    })
+    .catch(function() {
+      if (loginAttempt == loginAttemptGeneration) {
+        SetSignedOutStateTopbar();
+      }
+    });
 }
 
 /*
@@ -304,9 +372,26 @@ function AttemptRefreshToken(tokenArg) {
       var storedToken = (typeof items['radarToken'] == 'undefined') ? null : items['radarToken'];
       var storedRefreshToken = (typeof items['radarRefreshToken'] == 'undefined') ? null : items['radarRefreshToken'];
       var storedClientId = (typeof items['radarClientId'] == 'undefined') ? null : items['radarClientId'];
-      callback(token == tokenAtRequest && tokenArg == currentRefreshToken && refreshToken == currentRefreshToken &&
-        credentialClientId == clientIdAtRequest && storedToken == tokenAtRequest &&
-        storedRefreshToken == currentRefreshToken && storedClientId == ESI_CLIENT_ID);
+      if (token != tokenAtRequest || tokenArg != currentRefreshToken || refreshToken != currentRefreshToken ||
+          credentialClientId != clientIdAtRequest || storedToken != tokenAtRequest ||
+          storedRefreshToken != currentRefreshToken || storedClientId != ESI_CLIENT_ID) {
+        callback(false);
+        return;
+      }
+      chrome.storage.local.get(['radarToken', 'radarRefreshToken', 'radarClientId'], (currentItems) => {
+        var currentLastError = chrome.runtime.lastError;
+        if (currentLastError) {
+          callback(false);
+          return;
+        }
+        currentItems = currentItems || {};
+        var currentStoredToken = (typeof currentItems['radarToken'] == 'undefined') ? null : currentItems['radarToken'];
+        var currentStoredRefreshToken = (typeof currentItems['radarRefreshToken'] == 'undefined') ? null : currentItems['radarRefreshToken'];
+        var currentStoredClientId = (typeof currentItems['radarClientId'] == 'undefined') ? null : currentItems['radarClientId'];
+        callback(token == tokenAtRequest && tokenArg == currentRefreshToken && refreshToken == currentRefreshToken &&
+          credentialClientId == clientIdAtRequest && currentStoredToken == tokenAtRequest &&
+          currentStoredRefreshToken == currentRefreshToken && currentStoredClientId == ESI_CLIENT_ID);
+      });
     });
   }
 
@@ -352,12 +437,19 @@ function AttemptRefreshToken(tokenArg) {
           if (Object.prototype.hasOwnProperty.call(response, 'refresh_token')) {
             newRefreshToken = response['refresh_token'];
           }
-          localSet_Promise({
-            radarToken: newToken,
-            radarRefreshToken: newRefreshToken,
-            radarClientId: ESI_CLIENT_ID
+          CredentialMessage_Promise({
+            contentScriptQuery: 'storeCredentials',
+            token: newToken,
+            refreshToken: newRefreshToken,
+            expectedToken: tokenAtRequest,
+            expectedRefreshToken: currentRefreshToken,
+            expectedClientId: clientIdAtRequest
           })
-          .then( () => {
+          .then( (result) => {
+            if (!result || result.error) {
+              reject(result && result.error ? result : {error: "transient"});
+              return;
+            }
             if (token != tokenAtRequest || refreshToken != currentRefreshToken ||
                 credentialClientId != clientIdAtRequest) {
               reject({error: "stale"});
@@ -386,15 +478,20 @@ function AttemptRefreshToken(tokenArg) {
 function RevokeToken() {
   var tokenToRevoke = token;
   var refreshTokenToRevoke = refreshToken;
+  var clientIdToRevoke = credentialClientId;
 
-  token = null;
-  refreshToken = null;
-  credentialClientId = null;
-  SetLogoutStateTopbar();
+  loginAttemptGeneration += 1;
+  loginInProgress = false;
+  SetLogoutStateTopbar({
+    token: tokenToRevoke,
+    refreshToken: refreshTokenToRevoke,
+    clientId: clientIdToRevoke
+  }, false);
 
   try {
     chrome.runtime.sendMessage(
-      {contentScriptQuery: "revokeToken", token: tokenToRevoke, refreshToken: refreshTokenToRevoke},
+      {contentScriptQuery: "revokeToken", token: tokenToRevoke, refreshToken: refreshTokenToRevoke,
+        clientId: clientIdToRevoke},
       () => {
         var lastError = chrome.runtime.lastError;
         if (lastError) {
@@ -411,30 +508,17 @@ function RevokeToken() {
 /*
  * Resets the reactive data for when a user logs off in any tab
  */
-function SetLogoutStateTopbar() {
-  reactiveData.signInText = 'Sign in';
-  reactiveData.signInLink = 'javascript:;';
-  reactiveData.signInOnClick = StartLogin;
-  reactiveData.signInRole = '';
-  reactiveData.characterName = 'No character logged in';
-  reactiveData.charLocationDisplay = 'none';
-  reactiveData.notifierDisplay = 'none';
-  reactiveData.topbarContainerAnimation = 'slideIn 1s ease-out 0.5s 1 forwards';
-  reactiveData.topbarContainerAnimationModifier = 'slideIn 1s ease-out 0.5s 1 forwards';
-  reactiveData.characterPortrait = '';
-  if (reactiveData.trackingTriggerText == 'Stop Tracking') {
-    radarTrackingTrigger();
+function SetLogoutStateTopbar(credentialsToClear, clearSharedCredentials) {
+  var expectedCredentials = credentialsToClear || {
+    token: token,
+    refreshToken: refreshToken,
+    clientId: credentialClientId
+  };
+  SetSignedOutStateTopbar();
+  if (clearSharedCredentials !== false) {
+    ClearCredentials_Promise(expectedCredentials)
+    .catch( () => {});
   }
-  characterID = null;
-  token = null;
-  refreshToken = null;
-  credentialClientId = null;
-  localSet_Promise({
-    radarToken: null,
-    radarRefreshToken: null,
-    radarClientId: null
-  })
-  .catch( () => {});
 }
 
 /*
@@ -470,10 +554,11 @@ function syncData() {
       token = null;
       refreshToken = null;
       credentialClientId = null;
-      return localSet_Promise({
-        radarToken: null,
-        radarRefreshToken: null,
-        radarClientId: null
+      return CredentialMessage_Promise({
+        contentScriptQuery: 'clearCredentials',
+        expectedToken: storedToken,
+        expectedRefreshToken: storedRefreshToken,
+        expectedClientId: storedClientId
       });
     }
     token = storedToken;
@@ -497,6 +582,7 @@ var characterID = null;
 var characterHeartbeat = null;
 var initializationPending = false;
 var initializationInProgress = false;
+var loginAttemptGeneration = 0;
 
 // Promise wrappers for chrome.storage.local
 const localGet_Promise = key => new Promise((resolve, reject) => chrome.storage.local.get(key, items => {
@@ -507,14 +593,21 @@ const localGet_Promise = key => new Promise((resolve, reject) => chrome.storage.
   }
   resolve(items || {});
 }));
-const localSet_Promise = values => new Promise((resolve, reject) => chrome.storage.local.set(values, () => {
-  var lastError = chrome.runtime.lastError;
-  if (lastError) {
-    reject({error: 'transient'});
-    return;
+const CredentialMessage_Promise = request => new Promise((resolve, reject) => {
+  try {
+    chrome.runtime.sendMessage(request, response => {
+      var lastError = chrome.runtime.lastError;
+      if (lastError) {
+        reject({error: 'transient'});
+        return;
+      }
+      resolve(response || {error: 'transient'});
+    });
   }
-  resolve();
-}));
+  catch (error) {
+    reject({error: 'transient'});
+  }
+});
 
 function StartHeartbeat() {
   if (characterHeartbeat == null) {

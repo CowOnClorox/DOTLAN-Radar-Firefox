@@ -5,6 +5,9 @@ var ESI_TOKEN_URL = 'https://login.eveonline.com/v2/oauth/token';
 var ESI_REVOKE_URL = 'https://login.eveonline.com/v2/oauth/revoke';
 var ESI_SCOPE = 'esi-location.read_location.v1 esi-ui.write_waypoint.v1';
 var activeAuthAttempt = null;
+var credentialMutationQueue = Promise.resolve();
+var credentialMutationGeneration = 0;
+var credentialMutationsPending = 0;
 
 function RespondOnce(sendResponse) {
   var responseSent = false;
@@ -88,6 +91,117 @@ function RequestToken(body, refreshTokenOptional) {
     });
 }
 
+function NormalizeStoredCredentials(items) {
+  items = items || {};
+  return {
+    token: (typeof items.radarToken == 'undefined') ? null : items.radarToken,
+    refreshToken: (typeof items.radarRefreshToken == 'undefined') ? null : items.radarRefreshToken,
+    clientId: (typeof items.radarClientId == 'undefined') ? null : items.radarClientId
+  };
+}
+
+function ReadStoredCredentials() {
+  return new Promise(function(resolve, reject) {
+    try {
+      chrome.storage.local.get(['radarToken', 'radarRefreshToken', 'radarClientId'], function(items) {
+        var lastError = chrome.runtime.lastError;
+        if (lastError) {
+          reject({error: 'transient'});
+          return;
+        }
+        resolve(NormalizeStoredCredentials(items));
+      });
+    }
+    catch (error) {
+      reject({error: 'transient'});
+    }
+  });
+}
+
+function WriteStoredCredentials(credentials) {
+  return new Promise(function(resolve, reject) {
+    try {
+      chrome.storage.local.set({
+        radarToken: credentials.token,
+        radarRefreshToken: credentials.refreshToken,
+        radarClientId: credentials.clientId
+      }, function() {
+        var lastError = chrome.runtime.lastError;
+        if (lastError) {
+          reject({error: 'transient'});
+          return;
+        }
+        resolve();
+      });
+    }
+    catch (error) {
+      reject({error: 'transient'});
+    }
+  });
+}
+
+function StoredCredentialsMatch(actual, expected) {
+  return actual.token == expected.token && actual.refreshToken == expected.refreshToken &&
+    actual.clientId == expected.clientId;
+}
+
+function StoredCredentialsEmpty(credentials) {
+  return credentials.token == null && credentials.refreshToken == null && credentials.clientId == null;
+}
+
+function EnqueueCredentialMutation(operation) {
+  var operationGeneration = credentialMutationGeneration;
+  credentialMutationsPending += 1;
+  var result = credentialMutationQueue.then(function() {
+    if (operationGeneration != credentialMutationGeneration) {
+      return {error: 'stale'};
+    }
+    return operation(operationGeneration);
+  }).catch(function() {
+    return {error: 'transient'};
+  });
+  credentialMutationQueue = result.then(function(value) {
+    credentialMutationsPending -= 1;
+    return value;
+  });
+  return credentialMutationQueue;
+}
+
+function QueueCredentialWrite(credentials, expected, allowCleared) {
+  if (!credentials || typeof credentials.token != 'string' || credentials.token.length == 0 ||
+      typeof credentials.refreshToken != 'string' || credentials.refreshToken.length == 0 ||
+      credentials.clientId != ESI_CLIENT_ID) {
+    return Promise.resolve({error: 'transient'});
+  }
+  return EnqueueCredentialMutation(function(operationGeneration) {
+    return ReadStoredCredentials()
+      .then(function(current) {
+        if (!StoredCredentialsMatch(current, expected) && !(allowCleared && StoredCredentialsEmpty(current))) {
+          return {error: 'stale'};
+        }
+        return WriteStoredCredentials(credentials)
+          .then(function() {
+            return operationGeneration == credentialMutationGeneration ? {} : {error: 'stale'};
+          });
+      });
+  });
+}
+
+function QueueCredentialClear(expected, force) {
+  return EnqueueCredentialMutation(function(operationGeneration) {
+    return ReadStoredCredentials()
+      .then(function(current) {
+        if (!force && !StoredCredentialsMatch(current, expected)) {
+          return {error: 'stale'};
+        }
+        return WriteStoredCredentials({token: null, refreshToken: null, clientId: null})
+          .then(function() {
+            return operationGeneration == credentialMutationGeneration ? {} : {error: 'stale'};
+          });
+      });
+  });
+}
+
 function ValidateAuthRedirect(responseUrl, redirectUri, state) {
   var callbackUrl;
   var registeredUrl;
@@ -155,34 +269,16 @@ function StoreAuthCredentials(attempt, payload) {
       resolve({error: 'stale'});
       return;
     }
-    chrome.storage.local.get(['radarToken', 'radarRefreshToken', 'radarClientId'], function(items) {
-      var lastError = chrome.runtime.lastError;
-      if (lastError) {
-        resolve({error: 'transient'});
-        return;
-      }
-      items = items || {};
-      var storedToken = (typeof items.radarToken == 'undefined') ? null : items.radarToken;
-      var storedRefreshToken = (typeof items.radarRefreshToken == 'undefined') ? null : items.radarRefreshToken;
-      var storedClientId = (typeof items.radarClientId == 'undefined') ? null : items.radarClientId;
-      if (activeAuthAttempt !== attempt || storedToken != attempt.initialToken ||
-          storedRefreshToken != attempt.initialRefreshToken ||
-          storedClientId != attempt.initialClientId) {
-        resolve({error: 'stale'});
-        return;
-      }
-      chrome.storage.local.set({
-        radarToken: payload.access_token,
-        radarRefreshToken: payload.refresh_token,
-        radarClientId: ESI_CLIENT_ID
-      }, function() {
-        var setLastError = chrome.runtime.lastError;
-        if (setLastError) {
-          resolve({error: 'transient'});
-          return;
-        }
-        resolve(activeAuthAttempt === attempt ? {} : {error: 'stale'});
-      });
+    QueueCredentialWrite({
+      token: payload.access_token,
+      refreshToken: payload.refresh_token,
+      clientId: ESI_CLIENT_ID
+    }, {
+      token: attempt.initialToken,
+      refreshToken: attempt.initialRefreshToken,
+      clientId: attempt.initialClientId
+    }, true).then(function(result) {
+      resolve(activeAuthAttempt === attempt ? result : {error: 'stale'});
     });
   });
 }
@@ -305,19 +401,54 @@ chrome.runtime.onMessage.addListener(
       return StartAuth(sendResponse);
     }
     else if (request.contentScriptQuery == 'refreshToken') {
+      var refreshRespond = RespondOnce(sendResponse);
       RequestToken(new URLSearchParams([
         ['grant_type', 'refresh_token'],
         ['refresh_token', request.tokenArg],
         ['client_id', ESI_CLIENT_ID]
       ]), true)
       .then(function(result) {
-        sendResponse(result);
+        refreshRespond(result);
+      });
+      return true;
+    }
+    else if (request.contentScriptQuery == 'storeCredentials') {
+      var storeRespond = RespondOnce(sendResponse);
+      QueueCredentialWrite({
+        token: request.token,
+        refreshToken: request.refreshToken,
+        clientId: ESI_CLIENT_ID
+      }, {
+        token: request.expectedToken,
+        refreshToken: request.expectedRefreshToken,
+        clientId: request.expectedClientId
+      }).then(function(result) {
+        storeRespond(result);
+      });
+      return true;
+    }
+    else if (request.contentScriptQuery == 'clearCredentials') {
+      var clearRespond = RespondOnce(sendResponse);
+      QueueCredentialClear({
+        token: request.expectedToken,
+        refreshToken: request.expectedRefreshToken,
+        clientId: request.expectedClientId
+      }).then(function(result) {
+        clearRespond(result);
       });
       return true;
     }
     else if (request.contentScriptQuery == 'revokeToken') {
+      var hadActiveAuthAttempt = activeAuthAttempt !== null;
+      var forceCredentialClear = credentialMutationsPending > 0;
       activeAuthAttempt = null;
+      credentialMutationGeneration += 1;
       var respond = RespondOnce(sendResponse);
+      var clearCredentials = QueueCredentialClear({
+        token: request.token,
+        refreshToken: request.refreshToken,
+        clientId: (typeof request.clientId == 'undefined') ? ESI_CLIENT_ID : request.clientId
+      }, hadActiveAuthAttempt || forceCredentialClear);
       var revoke = function(tokenToRevoke, tokenTypeHint) {
         return Promise.resolve()
           .then(function() {
@@ -342,11 +473,12 @@ chrome.runtime.onMessage.addListener(
       };
 
       Promise.all([
+        clearCredentials,
         revoke(request.token, 'access_token'),
         revoke(request.refreshToken, 'refresh_token')
       ])
       .then(function(results) {
-        respond(results[0] && results[1]);
+        respond(results[1] && results[2]);
       })
       .catch(function() {
         respond(false);
