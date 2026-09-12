@@ -101,7 +101,8 @@ function ParseAccessToken(token) {
   if (!header || typeof header != 'object' || Array.isArray(header) ||
       !payload || typeof payload != 'object' || Array.isArray(payload) ||
       signature == null || signature.length == 0 ||
-      (header.alg != 'RS256' && header.alg != 'ES256') ||
+      typeof header.alg != 'string' ||
+      (header.alg !== 'RS256' && header.alg !== 'ES256') ||
       typeof header.kid != 'string' || header.kid.trim().length == 0) {
     return null;
   }
@@ -114,7 +115,7 @@ function ParseAccessToken(token) {
       Object.prototype.hasOwnProperty.call(header, 'jwk')) {
     return null;
   }
-  if (header.alg == 'ES256' && signature.length != 64) {
+  if (header.alg === 'ES256' && signature.length != 64) {
     return null;
   }
   return {
@@ -129,8 +130,9 @@ function ParseAccessToken(token) {
  * and bare-host compatibility forms; the similar-looking "logineveonline.com"
  * typo is intentionally not accepted. */
 function IsAcceptedIssuer(issuer) {
-  return issuer == 'https://login.eveonline.com/' ||
-    issuer == 'https://login.eveonline.com' || issuer == 'login.eveonline.com';
+  return typeof issuer == 'string' &&
+    (issuer === 'https://login.eveonline.com/' ||
+      issuer === 'https://login.eveonline.com' || issuer === 'login.eveonline.com');
 }
 
 function ArrayContains(values, expected) {
@@ -162,6 +164,8 @@ function FetchWithTimeout(url, options) {
       requestOptions.signal = controller.signal;
     }
     var settled = false;
+    var responseBodyPromise = null;
+    var responseBodyReject = null;
     var timeout = setTimeout(function() {
       if (settled) {
         return;
@@ -169,6 +173,12 @@ function FetchWithTimeout(url, options) {
       settled = true;
       if (controller) {
         controller.abort();
+      }
+      if (responseBodyReject != null) {
+        var rejectBody = responseBodyReject;
+        responseBodyReject = null;
+        rejectBody({error: 'transient'});
+        return;
       }
       reject({error: 'transient'});
     }, ESI_FETCH_TIMEOUT_MS);
@@ -178,9 +188,51 @@ function FetchWithTimeout(url, options) {
           if (settled) {
             return;
           }
-          settled = true;
-          clearTimeout(timeout);
-          resolve(response);
+          if (!response || typeof response.json != 'function') {
+            settled = true;
+            clearTimeout(timeout);
+            reject({error: 'transient'});
+            return;
+          }
+          var timedResponse = {
+            status: response.status,
+            redirected: response.redirected
+          };
+          timedResponse.json = function() {
+            if (responseBodyPromise != null) {
+              return responseBodyPromise;
+            }
+            if (settled) {
+              return Promise.reject({error: 'transient'});
+            }
+            responseBodyPromise = new Promise(function(resolveBody, rejectBody) {
+              responseBodyReject = rejectBody;
+              Promise.resolve()
+                .then(function() {
+                  return response.json();
+                })
+                .then(function(body) {
+                  if (settled) {
+                    return;
+                  }
+                  settled = true;
+                  responseBodyReject = null;
+                  clearTimeout(timeout);
+                  resolveBody(body);
+                })
+                .catch(function() {
+                  if (settled) {
+                    return;
+                  }
+                  settled = true;
+                  responseBodyReject = null;
+                  clearTimeout(timeout);
+                  rejectBody({error: 'transient'});
+                });
+            });
+            return responseBodyPromise;
+          };
+          resolve(timedResponse);
         })
         .catch(function() {
           if (settled) {
@@ -216,17 +268,19 @@ function FetchJson(url) {
 
 function IsTrustedJwkForToken(jwk, header) {
   if (!jwk || typeof jwk != 'object' || Array.isArray(jwk) ||
-      typeof jwk.kid != 'string' || jwk.kid.length == 0 || jwk.kid != header.kid ||
-      jwk.alg != header.alg || jwk.use != 'sig' ||
+      typeof jwk.kid != 'string' || jwk.kid.length == 0 || jwk.kid !== header.kid ||
+      typeof jwk.alg != 'string' || jwk.alg !== header.alg ||
+      typeof jwk.use != 'string' || jwk.use !== 'sig' ||
       (Object.prototype.hasOwnProperty.call(jwk, 'key_ops') &&
         (!Array.isArray(jwk.key_ops) || jwk.key_ops.indexOf('verify') == -1))) {
     return false;
   }
-  if (header.alg == 'RS256') {
-    return jwk.kty == 'RSA' && typeof jwk.n == 'string' && jwk.n.length > 0 &&
+  if (header.alg === 'RS256') {
+    return typeof jwk.kty == 'string' && jwk.kty === 'RSA' && typeof jwk.n == 'string' && jwk.n.length > 0 &&
       typeof jwk.e == 'string' && jwk.e.length > 0;
   }
-  return jwk.kty == 'EC' && jwk.crv == 'P-256' && typeof jwk.x == 'string' && jwk.x.length > 0 &&
+  return typeof jwk.kty == 'string' && jwk.kty === 'EC' && typeof jwk.crv == 'string' && jwk.crv === 'P-256' &&
+    typeof jwk.x == 'string' && jwk.x.length > 0 &&
     typeof jwk.y == 'string' && jwk.y.length > 0;
 }
 
@@ -236,7 +290,7 @@ function SelectVerificationJwk(jwks, header) {
     return null;
   }
   var keysWithKid = jwks.keys.filter(function(jwk) {
-    return jwk && jwk.kid == header.kid;
+    return jwk && typeof jwk.kid == 'string' && jwk.kid === header.kid;
   });
   if (keysWithKid.length != 1 || !IsTrustedJwkForToken(keysWithKid[0], header)) {
     return null;
@@ -293,7 +347,7 @@ function FetchJwks(forceRefresh) {
 }
 
 function ImportVerificationKey(jwk, algorithm) {
-  var importAlgorithm = algorithm == 'RS256' ? {
+  var importAlgorithm = algorithm === 'RS256' ? {
     name: 'RSASSA-PKCS1-v1_5',
     hash: {name: 'SHA-256'}
   } : {
@@ -312,7 +366,7 @@ function VerifyAccessTokenSignature(parsedToken, forceRefresh) {
       }
       return ImportVerificationKey(jwk, parsedToken.header.alg)
         .then(function(key) {
-          var verifyAlgorithm = parsedToken.header.alg == 'RS256' ?
+          var verifyAlgorithm = parsedToken.header.alg === 'RS256' ?
             {name: 'RSASSA-PKCS1-v1_5'} : {name: 'ECDSA', hash: {name: 'SHA-256'}};
           return crypto.subtle.verify(verifyAlgorithm, key, parsedToken.signature, parsedToken.signingInput);
         })
@@ -330,11 +384,14 @@ function ValidateAccessToken(token) {
   return VerifyAccessTokenSignature(parsedToken, false)
     .then(function(valid) {
       if (valid) {
+        if (!ValidateAccessTokenClaims(parsedToken.payload)) {
+          throw {error: 'invalid_token'};
+        }
         return parsedToken.payload;
       }
       return VerifyAccessTokenSignature(parsedToken, true)
         .then(function(rotatedValid) {
-          if (!rotatedValid) {
+          if (!rotatedValid || !ValidateAccessTokenClaims(parsedToken.payload)) {
             throw {error: 'invalid_token'};
           }
           return parsedToken.payload;
@@ -597,6 +654,10 @@ function QueueCredentialWrite(credentials, expected, allowCleared) {
                       .then(function(invalidatedAfterValidation) {
                         if (invalidatedAfterValidation || operationGeneration != credentialMutationGeneration) {
                           return {error: 'stale'};
+                        }
+                        var parsedCredentials = ParseAccessToken(credentials.token);
+                        if (parsedCredentials == null || !ValidateAccessTokenClaims(parsedCredentials.payload)) {
+                          return {error: 'invalid_token'};
                         }
                         return WriteStoredCredentials(credentials)
                           .then(function() {
