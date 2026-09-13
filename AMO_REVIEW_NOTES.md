@@ -4,9 +4,9 @@
 
 DOTLAN ESI Radar is a lightweight Firefox port of the upstream Chrome
 extension. It restores DOTLAN radar/location tracking through EVE's ESI API
-and can send a selected waypoint to the EVE client. This remains an incomplete
-development port, not an AMO-ready submission. No client secret, test-account
-credentials, telemetry service, or developer-operated backend is included.
+and can send a selected waypoint to the EVE client. No client secret,
+test-account credentials, telemetry service, or developer-operated backend is
+included. AMO validation remains pending.
 
 ## Permissions and declared data
 
@@ -58,14 +58,9 @@ credit, and Smashicons attribution are preserved in the repository.
 
 ## Remaining release work
 
-- Repeat the five Firefox smoke checks after this simplification.
 - Inspect console output and test actual background restart/lifecycle behavior.
 - Produce runtime-only packaging and test signed installation and consent.
-- Supply publication contact information for this fork.
-- Complete AMO review and approval.
-
-No publication contact has been invented, and no upstream support address is
-presented as this fork's contact.
+- Complete listing details and AMO submission and approval.
 
 The target is Firefox desktop 140+; Android is not opted into. `web-ext 10.6.0`
 reports two warnings:

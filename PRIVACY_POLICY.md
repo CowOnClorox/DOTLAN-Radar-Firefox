@@ -1,6 +1,6 @@
 # Privacy Policy
 
-DOTLAN ESI Radar is a Firefox development port of the upstream DOTLAN radar
+DOTLAN ESI Radar is a Firefox fork of the upstream DOTLAN radar
 extension. It has no developer-operated telemetry, analytics, cloud storage,
 or backend service. Data still leaves the browser directly to the external
 services below; their own policies govern handling and retention.
@@ -27,8 +27,3 @@ EVE SSO, ESI, and the portrait service are operated by or for CCP/EVE, while
 DOTLAN receives the map-page requests and URLs needed by the feature. This
 policy does not promise that those third parties store nothing; their own
 privacy and retention terms apply.
-
-This is an incomplete development port. Firefox's built-in data-collection
-consent declaration is in `manifest.json`. See
-[AMO_REVIEW_NOTES.md](AMO_REVIEW_NOTES.md) for release status and remaining
-review work. No separate maintainer contact is provided for this port.

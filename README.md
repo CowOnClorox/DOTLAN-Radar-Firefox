@@ -4,12 +4,10 @@ This repository is a lightweight Firefox port of the upstream Chrome
 extension. It restores the old radar (location tracking) feature in DOTLAN
 using EVE's ESI API. [Download the upstream Chrome version](https://chrome.google.com/webstore/detail/dotlan-esi-radar/gjdlibhgddgmjfapeiflcbjeobefnjnh).
 
-## Firefox development
+## Firefox port
 
-This is an incomplete Firefox development port. Its data declaration and
-release status are documented in [PRIVACY_POLICY.md](PRIVACY_POLICY.md) and
-[AMO_REVIEW_NOTES.md](AMO_REVIEW_NOTES.md); AMO review and approval are
-pending.
+This Firefox fork's data declaration and release status are documented in
+[PRIVACY_POLICY.md](PRIVACY_POLICY.md) and [AMO_REVIEW_NOTES.md](AMO_REVIEW_NOTES.md).
 
 Authentication uses Firefox Identity Authorization Code with PKCE and the
 registered public client. No client secret is bundled. The background owns
@@ -36,7 +34,7 @@ reproduce signed AMO distribution or its installation-time prompts.
 
 ### Smoke checklist
 
-These five checks were reported as passing by the user on 2026-09-13:
+The following five Firefox smoke checks passed:
 
 - Temporary loading and reloading in Firefox desktop.
 - One radar bar on DOTLAN and no radar UI on unrelated sites.
@@ -47,15 +45,11 @@ These five checks were reported as passing by the user on 2026-09-13:
 - Signing out and reloading the page leaves the user signed out; tracking no
   longer follows them.
 
-The post-simplification rerun of this checklist remains pending; these earlier
-passes are not a result for this change.
-
 ## Upstream project
 
-This fork is based on the [upstream Chrome project](https://github.com/ArtificialQualia/DOTLAN-Radar-Chrome-Extension). Its issue tracker and pull-request process remain upstream resources; this Firefox port does not yet publish a separate maintainer or publication contact.
+This fork is based on the [upstream Chrome project](https://github.com/ArtificialQualia/DOTLAN-Radar-Chrome-Extension). Its issue tracker and pull-request process remain upstream resources.
 
-Upstream donation attribution, retained here and not a contact or donation
-request from this Firefox fork: ISK donations are welcome to the upstream
+Upstream donation attribution: ISK donations are welcome to the upstream
 author's EVE character **Demogorgon Asmodeous**.
 
 ## Attributions

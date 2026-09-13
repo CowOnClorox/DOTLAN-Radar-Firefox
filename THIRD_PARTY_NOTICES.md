@@ -1,8 +1,11 @@
 # Third-Party Notices
 
-This extension bundles the libraries listed below. These notices provide version-specific provenance for Firefox AMO review and do not make the extension AMO-ready. They supplement, but do not replace, the information required in AMO reviewer notes under [Mozilla's third-party library guidance](https://extensionworkshop.com/documentation/publish/third-party-library-usage/).
+This extension bundles the libraries listed below. These notices record
+version-specific provenance and licensing for the bundled files, following
+[Mozilla's third-party library guidance](https://extensionworkshop.com/documentation/publish/third-party-library-usage/).
 
-The release artifacts were downloaded from the official tagged repositories for comparison and hashing only; no downloaded code was executed.
+Official tagged release artifacts were compared and hashed; no downloaded code
+was executed.
 
 ## Vue.js runtime 2.5.13
 
@@ -32,15 +35,16 @@ The release artifacts were downloaded from the official tagged repositories for 
 
 ## Icon attribution
 
-The following attribution is inherited from the existing README and was not independently provenance-verified in this commit:
+The following attribution is inherited from the existing README. Icon
+provenance was not independently verified here:
 
 > Icon made by [Smashicons](https://www.flaticon.com/authors/smashicons) from [www.flaticon.com](https://www.flaticon.com/) is licensed by [CC 3.0 BY](http://creativecommons.org/licenses/by/3.0/ "Creative Commons BY 3.0")
 
-The linked source is [Smashicons on Flaticon](https://www.flaticon.com/authors/smashicons); the linked licence is [Creative Commons Attribution 3.0](http://creativecommons.org/licenses/by/3.0/). The existing README attribution remains unchanged.
+The linked source is [Smashicons on Flaticon](https://www.flaticon.com/authors/smashicons); the linked licence is [Creative Commons Attribution 3.0](http://creativecommons.org/licenses/by/3.0/). The README retains this attribution.
 
 ## Scope and verification notes
 
 - `app/scripts/libraries` contains the Vue runtime and Axios files listed above; no other bundled library files were identified.
 - The licence files in `licenses/` are complete copies of the corresponding official release `LICENSE` files.
 - The comparisons above disclose the line-ending-only hash differences; neither bundled library was replaced.
-- Other AMO review items, including extension data declarations, privacy review, and authentication review, remain outside this notice and may still be pending.
+- Broader extension data, privacy, and authentication documentation is maintained separately from these library notices.
