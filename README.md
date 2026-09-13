@@ -79,9 +79,19 @@ direct archive output avoids passing binary data through PowerShell text
 processing. The archive contains only the allowlist above; README, privacy and
 review notes remain repository documentation outside the installable archive.
 
+## Support
+
+For questions and issues with this Firefox port, use the
+[GitHub Issues page](https://github.com/CowOnClorox/DOTLAN-Radar-Firefox/issues).
+For the Chrome extension, use the
+[upstream issue tracker](https://github.com/ArtificialQualia/DOTLAN-Radar-Chrome-Extension/issues).
+
 ## Upstream project
 
 This fork is based on the [upstream Chrome project](https://github.com/ArtificialQualia/DOTLAN-Radar-Chrome-Extension). Its issue tracker and pull-request process remain upstream resources.
+
+The `upstream` Git remote points to the original project; `origin` points to
+this Firefox fork. Review upstream changes before merging them into the port.
 
 Upstream donation attribution: ISK donations are welcome to the upstream
 author's EVE character **Demogorgon Asmodeous**.
