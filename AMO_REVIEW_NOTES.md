@@ -91,8 +91,11 @@ and [`git archive` documentation](https://git-scm.com/docs/git-archive).
 
 - Completed: reproducible unsigned packaging from a clean committed tree, with
   the fixed 16-file archive allowlist and committed-byte verification.
-- Pending: install the unsigned candidate for local inspection, inspect console
-  output, and test actual background restart/lifecycle behavior.
+- Completed on Firefox 155.0.1: temporary installation of the unsigned 1.3.0
+  candidate, console checks, signed-in tracking recovery after background
+  termination, and persistent sign-out after termination and page reload.
+  The open DOTLAN page's session checks can restart the background while signed
+  out; tracking remains stopped.
 - Pending: test signed installation and the Firefox consent experience.
 - Pending: prepare listing fields and support identity, if a submission is
   prepared.
