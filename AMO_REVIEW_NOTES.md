@@ -7,8 +7,8 @@ extension. It restores DOTLAN radar/location tracking through EVE's ESI API
 and can send a selected waypoint to the EVE client. No client secret,
 test-account credentials, telemetry service, or developer-operated backend is
 included. Version 1.3.0 is approved and signed by AMO for unlisted
-distribution. Public Firefox Add-ons listing remains pending; version 1.3.1
-is the candidate for that listing.
+distribution. Version 1.3.1 has been submitted for public Firefox Add-ons
+distribution and is awaiting AMO review.
 
 ## Permissions and declared data
 
@@ -102,11 +102,13 @@ and [`git archive` documentation](https://git-scm.com/docs/git-archive).
   pause/resume, waypoints, signed-in restart recovery, and sign-out persistence
   after restart. Public Firefox Add-ons distribution is the primary release
   channel; GitHub provides source code and support issues.
-- Prepared: listing drafts and GitHub Issues support under CowOnClorox.
+- Completed: AMO listing metadata, privacy policy, icon, and library source links.
 - Completed: AMO approved and signed version 1.3.0 for unlisted distribution.
-- Candidate: version 1.3.1 is prepared for the first public Firefox Add-ons
-  listing; it has not been uploaded, signed, or tested as a signed artifact.
-- Pending: public AMO listing submission and approval.
+- Submitted: public version 1.3.1 under CowOnClorox, with GitHub Issues support.
+  AMO version 6483480 / file 5027644: zero validation errors, two known warnings.
+- Assigned product page: [DOTLAN ESI Radar](https://addons.mozilla.org/en-US/firefox/addon/dotlan-esi-radar/).
+- Pending: AMO review and publication, followed by verification and installation
+  testing of the returned signed 1.3.1 artifact. Publication is not yet confirmed.
 
 The target is Firefox desktop 140+; Android is not opted into. `web-ext 10.6.0`
 reports two warnings:
