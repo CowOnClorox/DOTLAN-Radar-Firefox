@@ -58,35 +58,46 @@ credit, and Smashicons attribution are preserved in the repository.
 
 ## Release file sets
 
-1. **Public repository:** the committed Git contents, including readable
-   first-party JavaScript/CSS, the manifest, documentation, images, bundled
-   library artifacts, `LICENSE`, and `licenses/`.
-2. **Installable archive:** exactly the 16 entries in the closed `$archivePaths`
-   allowlist in [README.md](README.md): the manifest, six `app/scripts` files,
-   CSS, four icons, `LICENSE`, `THIRD_PARTY_NOTICES.md`, and two MIT notices.
-   README, privacy policy, these notes, Git metadata, logs, and local build
-   files are outside the archive.
-3. **Source submission:** first-party code is readable and is not compiled,
-   bundled, or minified; Git archive creation does not transform it. If
-   Mozilla requires source material, submit the corresponding committed source
-   and reproducible instructions under its [source-code submission guidance](https://extensionworkshop.com/documentation/publish/source-code-submission/).
-   No speculative source archive is created here, and including minified
-   third-party files alone is not treated as satisfying such a requirement.
-4. **Reviewer/listing inputs:** the manifest, README, privacy policy, these
-   notes, third-party notices, GPL licence, and MIT licence texts, together
-   with listing metadata, support identity, and signing/consent material when
-   a submission is prepared.
+1. **Public repository snapshot:** the 16 archive files named by the closed
+   `$archivePaths` allowlist in [README.md](README.md), plus `.gitignore`,
+   `README.md`, `PRIVACY_POLICY.md`, and `AMO_REVIEW_NOTES.md`. This is the
+   documented public snapshot for the candidate; other Git metadata is not
+   part of this file set.
+2. **Installable archive:** exactly the existing 16-file `$archivePaths`
+   allowlist in [README.md](README.md), unchanged. README, the privacy policy,
+   these notes, Git metadata, logs, and local build files are outside the
+   archive.
+3. **Available source/reproduction material:** the 16 archive files plus
+   `README.md`, `PRIVACY_POLICY.md`, and `AMO_REVIEW_NOTES.md`. No separate
+   source archive is currently built. Readable first-party code and tagged
+   third-party source links remain available, but the minified third-party
+   files alone do not satisfy any source requirement. Reproduction commands
+   that use Git require the repository and its selected commit; a source-only
+   extraction does not support those Git commands. If Mozilla requests
+   additional source material, provide the corresponding source package under
+   its [source-code submission guidance](https://extensionworkshop.com/documentation/publish/source-code-submission/).
+4. **Existing reviewer/listing inputs:** `manifest.json`, `README.md`,
+   `PRIVACY_POLICY.md`, `AMO_REVIEW_NOTES.md`, `THIRD_PARTY_NOTICES.md`,
+   `LICENSE`, `licenses/vue-2.5.13-MIT.txt`,
+   `licenses/axios-0.17.1-MIT.txt`, and `images/icon128.png`. Unprepared
+   listing fields, support identity, and signed-install/consent results remain
+   pending and are not represented as completed submission inputs.
 
 The packaging approach follows Mozilla's [extension packaging guidance](https://extensionworkshop.com/documentation/publish/package-your-extension/),
 the [third-party library guidance](https://extensionworkshop.com/documentation/publish/third-party-library-usage/),
 and [`git archive` documentation](https://git-scm.com/docs/git-archive).
 
-## Remaining release work
+## Release status and remaining work
 
-- Inspect console output and test actual background restart/lifecycle behavior.
-- Produce runtime-only packaging and test signed installation and consent.
-- Establish listing metadata and support identity, if a submission is prepared.
-- Complete AMO submission and approval.
+- Completed: reproducible unsigned packaging from a clean committed tree, with
+  the fixed 16-file archive allowlist and committed-byte verification.
+- Pending: install the unsigned candidate for local inspection, inspect console
+  output, and test actual background restart/lifecycle behavior.
+- Pending: test signed installation and the Firefox consent experience.
+- Pending: prepare listing fields and support identity, if a submission is
+  prepared.
+- Pending: submit to AMO and receive approval; no publication, signing, or AMO
+  approval has occurred.
 
 The target is Firefox desktop 140+; Android is not opted into. `web-ext 10.6.0`
 reports two warnings:
