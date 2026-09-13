@@ -9,6 +9,11 @@ using EVE's ESI API. [Download the upstream Chrome version](https://chrome.googl
 This Firefox fork's data declaration and release status are documented in
 [PRIVACY_POLICY.md](PRIVACY_POLICY.md) and [AMO_REVIEW_NOTES.md](AMO_REVIEW_NOTES.md).
 
+Firefox Add-ons is the intended primary installation and update channel for
+this port. The public listing remains pending; GitHub provides source code and
+support issues. Version 1.3.1 is the candidate for the first public listing,
+not a published release.
+
 Authentication uses Firefox Identity Authorization Code with PKCE and the
 registered public client. No client secret is bundled. The background owns
 refresh tokens, verification, and credential storage; pages receive only a
@@ -44,6 +49,17 @@ The following five Firefox smoke checks passed:
   in-game route.
 - Signing out and reloading the page leaves the user signed out; tracking no
   longer follows them.
+
+### Version 1.3.0 release record
+
+Version 1.3.0 was approved and signed by AMO for unlisted distribution. Signed
+installation in a fresh Firefox profile passed, including the required
+installation-time data-consent display, cancellation, and accepted
+installation. Sign-in, location tracking, pause/resume, waypoint delivery,
+signed-in recovery after background termination, persistent sign-out after
+termination and reload, and the earlier console and background-lifecycle
+checks passed for 1.3.0. These results apply to 1.3.0 only; they do not claim
+that a signed 1.3.1 has been tested.
 
 ## Reproducible packaging
 
