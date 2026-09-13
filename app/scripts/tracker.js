@@ -164,6 +164,24 @@ function ApplySession(session) {
   SetSignedInStateTopbar();
 }
 
+function ApplySessionResponse(session) {
+  if (!session || session.error) {
+    if (session && session.error == 'unavailable') {
+      SetUnavailableState();
+    }
+    else if (session && (session.error == 'signed_out' || session.error == 'invalid_token')) {
+      SetSignedOutStateTopbar();
+    }
+    return null;
+  }
+  if (session.exp <= Date.now() / 1000) {
+    SetUnavailableState();
+    return null;
+  }
+  ApplySession(session);
+  return session;
+}
+
 function syncData() {
   var generation = loginAttemptGeneration;
   if (logoutInProgress) {
@@ -173,21 +191,7 @@ function syncData() {
     if (logoutInProgress || generation != loginAttemptGeneration) {
       return null;
     }
-    if (!session || session.error) {
-      if (session && session.error == 'unavailable') {
-        SetUnavailableState();
-      }
-      else if (session && (session.error == 'signed_out' || session.error == 'invalid_token')) {
-        SetSignedOutStateTopbar();
-      }
-      return null;
-    }
-    if (session.exp <= Date.now() / 1000) {
-      SetUnavailableState();
-      return null;
-    }
-    ApplySession(session);
-    return session;
+    return ApplySessionResponse(session);
   }).catch(function() {
     if (generation == loginAttemptGeneration) {
       SetUnavailableState();
@@ -196,11 +200,18 @@ function syncData() {
   });
 }
 
-function RestoreLoginState(loginAttempt) {
+function FinishLogin(loginAttempt, response) {
   if (loginAttempt != loginAttemptGeneration) {
-    return Promise.resolve();
+    return;
   }
-  return syncData();
+  loginInProgress = false;
+  var session = NormalizeSession(response);
+  if (!session || session.error) {
+    syncData();
+    return;
+  }
+  radarTrackingEnabled = true;
+  ApplySession(session);
 }
 
 function StartLogin(event) {
@@ -221,50 +232,18 @@ function StartLogin(event) {
   reactiveData.signInText = 'Signing in...';
   BackgroundMessage({contentScriptQuery: 'startAuth'})
     .then(function(response) {
-      if (loginAttempt != loginAttemptGeneration) {
-        return;
-      }
-      loginInProgress = false;
-      var session = NormalizeSession(response);
-      if (!session || session.error) {
-        RestoreLoginState(loginAttempt);
-        return;
-      }
-      radarTrackingEnabled = true;
-      ApplySession(session);
+      FinishLogin(loginAttempt, response);
     })
     .catch(function() {
-      if (loginAttempt != loginAttemptGeneration) {
-        return;
-      }
-      loginInProgress = false;
-      RestoreLoginState(loginAttempt);
+      FinishLogin(loginAttempt);
     });
   return false;
 }
 
-function GetCharacterID() {
-  var generation = loginAttemptGeneration;
-  var expected = activeSession;
-  return RequestSession(expected).then(function(session) {
-    if (generation != loginAttemptGeneration) {
-      throw {error: 'stale'};
-    }
-    if (!session || session.error) {
-      throw session || {error: 'unavailable'};
-    }
-    if (expected != null && !SessionIdentityMatches(expected, session)) {
-      throw {error: 'stale'};
-    }
-    if (session.exp <= Date.now() / 1000) {
-      throw {error: 'invalid_token'};
-    }
-    ApplySession(session);
-    return session;
-  });
-}
-
 function FindLocation(session) {
+  var nextCharacterLocation;
+  var nextSystemName;
+  var nextRegion;
   return SessionUseIsCurrent(session)
     .then(function(isCurrent) {
       if (!isCurrent) {
@@ -277,51 +256,44 @@ function FindLocation(session) {
       });
     })
     .then(function(response) {
+      nextCharacterLocation = response.data.solar_system_id;
       return SessionUseIsCurrent(session).then(function(isCurrent) {
         if (!isCurrent) {
           throw {error: 'stale'};
         }
         if (locationStateSession != null &&
             SessionIdentityMatches(locationStateSession, session) &&
-            characterLocation == response.data.solar_system_id) {
+            characterLocation == nextCharacterLocation) {
           throw 'no update';
         }
-        characterLocation = response.data.solar_system_id;
         return axios({
           method: 'get',
-          url: 'https://esi.evetech.net/latest/universe/systems/'+response.data.solar_system_id+'/?language=en'
+          url: 'https://esi.evetech.net/latest/universe/systems/'+nextCharacterLocation+'/?language=en'
         });
       });
     })
     .then(function(response) {
-      return SessionUseIsCurrent(session).then(function(isCurrent) {
-        if (!isCurrent) {
-          throw {error: 'stale'};
-        }
-        systemName = response.data.name.replace(/ /gi, '_');
-        return axios({
-          method: 'get',
-          url: 'https://esi.evetech.net/latest/universe/constellations/'+response.data.constellation_id+'/?language=en'
-        });
+      nextSystemName = response.data.name.replace(/ /gi, '_');
+      return axios({
+        method: 'get',
+        url: 'https://esi.evetech.net/latest/universe/constellations/'+response.data.constellation_id+'/?language=en'
+      });
+    })
+    .then(function(response) {
+      return axios({
+        method: 'get',
+        url: 'https://esi.evetech.net/latest/universe/regions/'+response.data.region_id+'/?language=en'
       });
     })
     .then(function(response) {
       return SessionUseIsCurrent(session).then(function(isCurrent) {
-        if (!isCurrent) {
+        if (!isCurrent || !radarTrackingEnabled) {
           throw {error: 'stale'};
         }
-        return axios({
-          method: 'get',
-          url: 'https://esi.evetech.net/latest/universe/regions/'+response.data.region_id+'/?language=en'
-        });
-      });
-    })
-    .then(function(response) {
-      return SessionUseIsCurrent(session).then(function(isCurrent) {
-        if (!isCurrent) {
-          throw {error: 'stale'};
-        }
-        region = response.data.name.replace(/ /gi, '_');
+        nextRegion = response.data.name.replace(/ /gi, '_');
+        characterLocation = nextCharacterLocation;
+        systemName = nextSystemName;
+        region = nextRegion;
         locationStateSession = session;
         reactiveData.characterLocation = systemName+', '+region;
         if (location.pathname.split('#')[0] != '/map/'+region+'/'+systemName &&

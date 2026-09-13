@@ -22,17 +22,12 @@ function addWaypoint(location, asDestination) {
     });
   })
   .then( (destination) => {
-    return SessionUseIsCurrent(actionSession).then(function(isCurrent) {
-      if (!isCurrent) {
-        throw {error: 'stale'};
-      }
-      return axios({
-        method: 'post',
-        url: 'https://esi.evetech.net/latest/ui/autopilot/waypoint/?language=en&add_to_beginning=false&clear_other_waypoints='+asDestination+'&destination_id='+destination.destination,
-        headers: {Authorization: 'Bearer '+actionSession.token}
-      }).then(function() {
-        return actionSession;
-      });
+    return axios({
+      method: 'post',
+      url: 'https://esi.evetech.net/latest/ui/autopilot/waypoint/?language=en&add_to_beginning=false&clear_other_waypoints='+asDestination+'&destination_id='+destination.destination,
+      headers: {Authorization: 'Bearer '+actionSession.token}
+    }).then(function() {
+      return actionSession;
     });
   })
   .then( (verified) => {
