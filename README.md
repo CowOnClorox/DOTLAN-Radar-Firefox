@@ -45,6 +45,40 @@ The following five Firefox smoke checks passed:
 - Signing out and reloading the page leaves the user signed out; tracking no
   longer follows them.
 
+## Reproducible packaging
+
+From a clean, committed checkout, run this PowerShell command. It reads the
+version and commit timestamp from the selected commit, archives the Git tree
+instead of the Windows checkout, and writes an unsigned candidate under the
+ignored `build` directory.
+
+```powershell
+$commit = (git rev-parse HEAD).Trim()
+if (git status --porcelain=v1) { throw 'Build from a clean, committed state.' }
+$version = (git show "${commit}:manifest.json" | ConvertFrom-Json).version
+$tree = (git rev-parse "${commit}^{tree}").Trim()
+$mtime = (git show -s --format=%cI $commit).Trim()
+$archivePaths = @(
+  'manifest.json',
+  'app/scripts/background_api.js', 'app/scripts/topbar.js',
+  'app/scripts/tracker.js', 'app/scripts/waypoints.js',
+  'app/scripts/libraries/vue.runtime.min.js',
+  'app/scripts/libraries/axios.min.js',
+  'app/views/topbar.css',
+  'images/icon16.png', 'images/icon24.png', 'images/icon32.png', 'images/icon128.png',
+  'LICENSE', 'THIRD_PARTY_NOTICES.md',
+  'licenses/vue-2.5.13-MIT.txt', 'licenses/axios-0.17.1-MIT.txt'
+)
+$archive = Join-Path (Join-Path (Get-Location) 'build') "dotlan-esi-radar-firefox-$version-unsigned.zip"
+New-Item -ItemType Directory -Force (Split-Path $archive) | Out-Null
+git archive --format=zip --mtime="$mtime" --output="$archive" "$tree" -- $archivePaths
+```
+
+The explicit tree ID avoids Git's automatic commit-ID ZIP comment, and the
+direct archive output avoids passing binary data through PowerShell text
+processing. The archive contains only the allowlist above; README, privacy and
+review notes remain repository documentation outside the installable archive.
+
 ## Upstream project
 
 This fork is based on the [upstream Chrome project](https://github.com/ArtificialQualia/DOTLAN-Radar-Chrome-Extension). Its issue tracker and pull-request process remain upstream resources.

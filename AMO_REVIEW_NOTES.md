@@ -56,11 +56,37 @@ Bundled Vue and Axios provenance, hashes, and complete MIT notices are in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). GPL-3.0 licensing, upstream
 credit, and Smashicons attribution are preserved in the repository.
 
+## Release file sets
+
+1. **Public repository:** the committed Git contents, including readable
+   first-party JavaScript/CSS, the manifest, documentation, images, bundled
+   library artifacts, `LICENSE`, and `licenses/`.
+2. **Installable archive:** exactly the 16 entries in the closed `$archivePaths`
+   allowlist in [README.md](README.md): the manifest, six `app/scripts` files,
+   CSS, four icons, `LICENSE`, `THIRD_PARTY_NOTICES.md`, and two MIT notices.
+   README, privacy policy, these notes, Git metadata, logs, and local build
+   files are outside the archive.
+3. **Source submission:** first-party code is readable and is not compiled,
+   bundled, or minified; Git archive creation does not transform it. If
+   Mozilla requires source material, submit the corresponding committed source
+   and reproducible instructions under its [source-code submission guidance](https://extensionworkshop.com/documentation/publish/source-code-submission/).
+   No speculative source archive is created here, and including minified
+   third-party files alone is not treated as satisfying such a requirement.
+4. **Reviewer/listing inputs:** the manifest, README, privacy policy, these
+   notes, third-party notices, GPL licence, and MIT licence texts, together
+   with listing metadata, support identity, and signing/consent material when
+   a submission is prepared.
+
+The packaging approach follows Mozilla's [extension packaging guidance](https://extensionworkshop.com/documentation/publish/package-your-extension/),
+the [third-party library guidance](https://extensionworkshop.com/documentation/publish/third-party-library-usage/),
+and [`git archive` documentation](https://git-scm.com/docs/git-archive).
+
 ## Remaining release work
 
 - Inspect console output and test actual background restart/lifecycle behavior.
 - Produce runtime-only packaging and test signed installation and consent.
-- Complete listing details and AMO submission and approval.
+- Establish listing metadata and support identity, if a submission is prepared.
+- Complete AMO submission and approval.
 
 The target is Firefox desktop 140+; Android is not opted into. `web-ext 10.6.0`
 reports two warnings:
@@ -71,3 +97,5 @@ reports two warnings:
   to the desktop minimum of 140 for its Android check, where data consent
   requires 142. Keep the desktop minimum and consent declaration; Android
   metadata remains absent for this desktop-only port.
+
+No signing, submission, approval, or publication has occurred.
