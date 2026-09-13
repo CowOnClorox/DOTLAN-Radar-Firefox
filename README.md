@@ -71,7 +71,7 @@ $archivePaths = @(
 )
 $archive = Join-Path (Join-Path (Get-Location) 'build') "dotlan-esi-radar-firefox-$version-unsigned.zip"
 New-Item -ItemType Directory -Force (Split-Path $archive) | Out-Null
-git archive --format=zip --mtime="$mtime" --output="$archive" "$tree" -- $archivePaths
+git -c core.autocrlf=false archive --format=zip --mtime="$mtime" --output="$archive" "$tree" -- $archivePaths
 ```
 
 The explicit tree ID avoids Git's automatic commit-ID ZIP comment, and the
