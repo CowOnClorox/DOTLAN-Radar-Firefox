@@ -6,7 +6,7 @@ DOTLAN ESI Radar is a lightweight Firefox port of the upstream Chrome
 extension. It restores DOTLAN radar/location tracking through EVE's ESI API
 and can send a selected waypoint to the EVE client. No client secret,
 test-account credentials, telemetry service, or developer-operated backend is
-included. AMO validation remains pending.
+included. Version 1.3.0 is AMO-signed for unlisted distribution.
 
 ## Permissions and declared data
 
@@ -63,10 +63,10 @@ credit, and Smashicons attribution are preserved in the repository.
    `README.md`, `PRIVACY_POLICY.md`, and `AMO_REVIEW_NOTES.md`. This is the
    documented public snapshot for the candidate; other Git metadata is not
    part of this file set.
-2. **Installable archive:** exactly the existing 16-file `$archivePaths`
+2. **Unsigned archive:** exactly the existing 16-file `$archivePaths`
    allowlist in [README.md](README.md), unchanged. README, the privacy policy,
    these notes, Git metadata, logs, and local build files are outside the
-   archive.
+   archive. The signed XPI adds five Mozilla `META-INF/` signature files.
 3. **Available source/reproduction material:** the 16 archive files plus
    `README.md`, `PRIVACY_POLICY.md`, and `AMO_REVIEW_NOTES.md`. No separate
    source archive is currently built. Readable first-party code and tagged
@@ -79,9 +79,8 @@ credit, and Smashicons attribution are preserved in the repository.
 4. **Existing reviewer/listing inputs:** `manifest.json`, `README.md`,
    `PRIVACY_POLICY.md`, `AMO_REVIEW_NOTES.md`, `THIRD_PARTY_NOTICES.md`,
    `LICENSE`, `licenses/vue-2.5.13-MIT.txt`,
-   `licenses/axios-0.17.1-MIT.txt`, and `images/icon128.png`. Unprepared
-   listing fields, support identity, and signed-install/consent results remain
-   pending and are not represented as completed submission inputs.
+   `licenses/axios-0.17.1-MIT.txt`, and `images/icon128.png`. Listing drafts
+   are prepared; signed-install/consent results remain pending.
 
 The packaging approach follows Mozilla's [extension packaging guidance](https://extensionworkshop.com/documentation/publish/package-your-extension/),
 the [third-party library guidance](https://extensionworkshop.com/documentation/publish/third-party-library-usage/),
@@ -97,10 +96,9 @@ and [`git archive` documentation](https://git-scm.com/docs/git-archive).
   The open DOTLAN page's session checks can restart the background while signed
   out; tracking remains stopped.
 - Pending: test signed installation and the Firefox consent experience.
-- Pending: prepare listing fields and support identity, if a submission is
-  prepared.
-- Pending: submit to AMO and receive approval; no publication, signing, or AMO
-  approval has occurred.
+- Prepared: listing drafts and GitHub Issues support under CowOnClorox.
+- Completed: AMO approved and signed version 1.3.0 for unlisted distribution.
+- Pending: public AMO listing submission and approval.
 
 The target is Firefox desktop 140+; Android is not opted into. `web-ext 10.6.0`
 reports two warnings:
@@ -112,4 +110,5 @@ reports two warnings:
   requires 142. Keep the desktop minimum and consent declaration; Android
   metadata remains absent for this desktop-only port.
 
-No signing, submission, approval, or publication has occurred.
+Signed 1.3.0: 76,517 bytes; SHA-256:
+`dbc6864749da9654345cb7b8e913104c9796d0d2ec960a38050741a8601cd36c`.
