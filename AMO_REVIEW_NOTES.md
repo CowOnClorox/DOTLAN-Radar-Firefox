@@ -66,3 +66,13 @@ credit, and Smashicons attribution are preserved in the repository.
 
 No publication contact has been invented, and no upstream support address is
 presented as this fork's contact.
+
+The target is Firefox desktop 140+; Android is not opted into. `web-ext 10.6.0`
+reports two warnings:
+
+- `BACKGROUND_SERVICE_WORKER_IGNORED`: Firefox uses `background.scripts` and
+  ignores the retained service-worker entry.
+- `KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION`: the validator falls back
+  to the desktop minimum of 140 for its Android check, where data consent
+  requires 142. Keep the desktop minimum and consent declaration; Android
+  metadata remains absent for this desktop-only port.
