@@ -317,8 +317,7 @@ function CreateVerifiedDetails(token, claims) {
     token: token,
     characterID: claims.sub.split(':')[2],
     characterName: claims.name,
-    exp: claims.exp,
-    claims: claims
+    exp: claims.exp
   };
 }
 
@@ -399,20 +398,14 @@ function RequestToken(body, refreshTokenOptional) {
         .catch(function(error) {
           return NormalizeTokenValidationError(error);
         });
+    })
+    .catch(function() {
+      return {error: 'transient'};
     });
 }
 
 function NormalizeStoredCredentials(items) {
   items = items || {};
-  if (Object.prototype.hasOwnProperty.call(items, 'token') ||
-      Object.prototype.hasOwnProperty.call(items, 'refreshToken') ||
-      Object.prototype.hasOwnProperty.call(items, 'clientId')) {
-    return {
-      token: (typeof items.token == 'undefined') ? null : items.token,
-      refreshToken: (typeof items.refreshToken == 'undefined') ? null : items.refreshToken,
-      clientId: (typeof items.clientId == 'undefined') ? null : items.clientId
-    };
-  }
   return {
     token: (typeof items.radarToken == 'undefined') ? null : items.radarToken,
     refreshToken: (typeof items.radarRefreshToken == 'undefined') ? null : items.radarRefreshToken,
