@@ -80,7 +80,7 @@ credit, and Smashicons attribution are preserved in the repository.
    `PRIVACY_POLICY.md`, `AMO_REVIEW_NOTES.md`, `THIRD_PARTY_NOTICES.md`,
    `LICENSE`, `licenses/vue-2.5.13-MIT.txt`,
    `licenses/axios-0.17.1-MIT.txt`, and `images/icon128.png`. Listing drafts
-   are prepared; signed-install/consent results remain pending.
+   are prepared; signed-install/consent checks passed for unlisted 1.3.0.
 
 The packaging approach follows Mozilla's [extension packaging guidance](https://extensionworkshop.com/documentation/publish/package-your-extension/),
 the [third-party library guidance](https://extensionworkshop.com/documentation/publish/third-party-library-usage/),
@@ -95,7 +95,11 @@ and [`git archive` documentation](https://git-scm.com/docs/git-archive).
   termination, and persistent sign-out after termination and page reload.
   The open DOTLAN page's session checks can restart the background while signed
   out; tracking remains stopped.
-- Pending: test signed installation and the Firefox consent experience.
+- Completed: signed 1.3.0 installation in a fresh Firefox profile, required
+  data-consent display, cancellation and accepted installation, live tracking,
+  pause/resume, waypoints, signed-in restart recovery, and sign-out persistence
+  after restart. Public Firefox Add-ons distribution is the primary release
+  channel; GitHub provides source code and support issues.
 - Prepared: listing drafts and GitHub Issues support under CowOnClorox.
 - Completed: AMO approved and signed version 1.3.0 for unlisted distribution.
 - Pending: public AMO listing submission and approval.
