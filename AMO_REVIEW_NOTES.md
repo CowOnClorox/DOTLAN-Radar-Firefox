@@ -1,80 +1,68 @@
 # Firefox AMO review notes
 
-## Status and purpose
+## Purpose and status
 
-DOTLAN ESI Radar is a small Firefox port of the upstream Chrome extension. It
-adds the former radar/location-tracking view to DOTLAN using EVE's ESI API and
-can send a selected waypoint to the EVE client. This is an incomplete
-development port, not an AMO-ready submission. No test-account credentials,
-client secret, telemetry service, or developer-operated backend is included.
+DOTLAN ESI Radar is a lightweight Firefox port of the upstream Chrome
+extension. It restores DOTLAN radar/location tracking through EVE's ESI API
+and can send a selected waypoint to the EVE client. This remains an incomplete
+development port, not an AMO-ready submission. No client secret, test-account
+credentials, telemetry service, or developer-operated backend is included.
 
-## Permissions and data declaration
+## Permissions and declared data
 
-The existing `storage` permission stores the OAuth access/refresh credentials
-locally; the background script owns refresh-token use and credential storage.
-The existing `identity` permission runs Firefox's interactive OAuth flow. The
-existing host permissions cover ESI, EVE SSO, and DOTLAN map pages.
+The existing `storage` permission keeps OAuth credentials local, with refresh
+tokens and credential writes owned by the background. `identity` runs the
+interactive Firefox OAuth flow. Host permissions cover ESI, EVE SSO, and
+DOTLAN map pages. Firefox 140's built-in consent declaration follows
+[Mozilla's data-consent taxonomy](https://extensionworkshop.com/documentation/develop/firefox-builtin-data-consent/)
+and the [manifest reference](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/browser_specific_settings).
 
-Firefox 140's built-in consent declaration follows [Mozilla's data-consent
-taxonomy](https://extensionworkshop.com/documentation/develop/firefox-builtin-data-consent/)
-and [manifest reference](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/browser_specific_settings).
-It requires these categories in `manifest.json`:
+The declared categories are:
 
-- `authenticationInfo`: the EVE OAuth access and refresh tokens used for the
-  account session. They are stored locally and sent only to the relevant EVE
-  endpoints as required by the flow.
-- `personallyIdentifyingInfo`: the EVE character ID and name used with ESI and
-  the EVE portrait service. These identify an EVE character, not a real-world
-  identity supplied by this extension.
-- `websiteActivity`: the user's DOTLAN tracking and waypoint interactions,
-  including the selected waypoint posted to ESI and the resulting DOTLAN map
-  navigation URL. This is not a browsing-history collector.
+- `authenticationInfo`: EVE OAuth access and refresh tokens used for the
+  account session and sent to the relevant EVE endpoints.
+- `personallyIdentifyingInfo`: the EVE character ID and verified name that
+  identify the in-game character; the ID is used with ESI and the portrait
+  service.
+- `websiteActivity`: DOTLAN tracking and waypoint interactions, including the
+  waypoint sent to ESI and the resulting DOTLAN map URL. This is not a
+  browsing-history collector.
 
 The extension does not use physical device location, GPS, bookmarks, search
-terms, communications, health or financial data, or technical/error telemetry;
-`locationInfo` and those other categories are therefore not declared. The
-in-game EVE location is fictional game-world data used in ESI and map requests,
-not physical location information. `none` is not appropriate because the
-listed data is transmitted outside the add-on to EVE/ESI and DOTLAN.
-
-The desktop minimum remains Firefox 140. Android is constrained to Firefox 142
-so the same built-in consent support is available there; Android behavior is
-not part of this review.
-
-There is no developer-operated server collecting these values. EVE SSO, ESI,
+terms, communications, health or financial data, or technical/error telemetry.
+The in-game EVE location is fictional game-world data, not physical location.
+There is no developer-operated server collecting these values; EVE SSO, ESI,
 and the portrait service are operated by or for CCP/EVE, while DOTLAN receives
-the map-page requests and URLs. Their storage and retention practices are not
+the map requests and URLs. Third-party storage and retention are not
 controlled or guaranteed by this extension.
 
-## Authentication and temporary testing
+## Authentication and implementation differences
 
-The registered public client uses Firefox Identity Authorization Code with
-PKCE, the registered callback, and the two EVE scopes
-`esi-location.read_location.v1` and `esi-ui.write_waypoint.v1`. No client
-secret is requested or retained. The background validates tokens and manages
-refresh and logout; the DOTLAN page receives only a verified, unexpired access
-token session. Local sign-out clears local credentials and attempts remote
-revocation on a best-effort basis.
+The registered public client uses Firefox Identity Authorization Code with PKCE,
+the registered callback, and scopes `esi-location.read_location.v1` and
+`esi-ui.write_waypoint.v1`. An EVE account with an eligible character and
+those scopes is required for live sign-in. See [README.md](README.md) for
+temporary installation and testing, and [PRIVACY_POLICY.md](PRIVACY_POLICY.md)
+for detailed data flows.
 
-For development, follow [Mozilla's temporary-installation
-guidance](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/): load `manifest.json` from
-`about:debugging#/runtime/this-firefox` with **Load Temporary Add-on** and
-reload the temporary add-on after edits. Temporary installation is not signed
-distribution and is removed by Firefox when the browser restarts or the
-temporary add-on is removed. An EVE account with an eligible character and the
-registered scopes is required for live sign-in.
+Compared with the upstream Chrome version, the major divergences are Firefox
+background/Identity compatibility, replacement of unsafe upstream OAuth with
+the registered public-client PKCE flow, verified background-owned credentials,
+coordinated refresh/logout, and protection of authenticated ESI requests.
+Remote public-client revocation remains best-effort and unverified against
+EVE's confidential-client guidance.
 
-## Third-party and release notes
+Bundled Vue and Axios provenance, hashes, and complete MIT notices are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). GPL-3.0 licensing, upstream
+credit, and Smashicons attribution are preserved in the repository.
 
-Bundled Vue and Axios provenance, version-specific links, hashes, and complete
-MIT notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Existing
-upstream credit, GPL-3.0 licensing, and Smashicons attribution are preserved
-in the repository.
+## Remaining release work
 
-Remaining release checks include console inspection, background
-restart/lifecycle behavior, signed-install behavior, complete privacy and
-OAuth review, and AMO approval. Publication contact information for this fork
-has not yet been supplied; no upstream support address is presented as this
-fork's contact. Current `web-ext lint` reports one expected warning:
-Firefox ignores the retained `background.service_worker` entry and uses
-`background.scripts` for compatibility.
+- Repeat the five Firefox smoke checks after this simplification.
+- Inspect console output and test actual background restart/lifecycle behavior.
+- Produce runtime-only packaging and test signed installation and consent.
+- Supply publication contact information for this fork.
+- Complete AMO review and approval.
+
+No publication contact has been invented, and no upstream support address is
+presented as this fork's contact.
