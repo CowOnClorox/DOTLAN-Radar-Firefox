@@ -99,7 +99,6 @@ function SetSignedOutStateTopbar() {
   reactiveData.signInText = 'Sign in';
   reactiveData.signInLink = 'javascript:;';
   reactiveData.signInOnClick = StartLogin;
-  reactiveData.signInRole = '';
 }
 
 function SetUnavailableState() {
@@ -164,24 +163,6 @@ function ApplySession(session) {
   SetSignedInStateTopbar();
 }
 
-function ApplySessionResponse(session) {
-  if (!session || session.error) {
-    if (session && session.error == 'unavailable') {
-      SetUnavailableState();
-    }
-    else if (session && (session.error == 'signed_out' || session.error == 'invalid_token')) {
-      SetSignedOutStateTopbar();
-    }
-    return null;
-  }
-  if (session.exp <= Date.now() / 1000) {
-    SetUnavailableState();
-    return null;
-  }
-  ApplySession(session);
-  return session;
-}
-
 function syncData() {
   var generation = loginAttemptGeneration;
   if (logoutInProgress) {
@@ -191,7 +172,21 @@ function syncData() {
     if (logoutInProgress || generation != loginAttemptGeneration) {
       return null;
     }
-    return ApplySessionResponse(session);
+    if (!session || session.error) {
+      if (session && session.error == 'unavailable') {
+        SetUnavailableState();
+      }
+      else if (session && (session.error == 'signed_out' || session.error == 'invalid_token')) {
+        SetSignedOutStateTopbar();
+      }
+      return null;
+    }
+    if (session.exp <= Date.now() / 1000) {
+      SetUnavailableState();
+      return null;
+    }
+    ApplySession(session);
+    return session;
   }).catch(function() {
     if (generation == loginAttemptGeneration) {
       SetUnavailableState();
@@ -368,27 +363,23 @@ function RevokeToken() {
     SetSignedOutStateTopbar();
     return false;
   }
+  var finishLogout = function(response) {
+    if (generation != loginAttemptGeneration) {
+      return;
+    }
+    logoutInProgress = false;
+    if (response && !response.error && response.ok === true) {
+      SetSignedOutStateTopbar();
+    }
+    else {
+      SetUnavailableState();
+    }
+  };
   BackgroundMessage({
     contentScriptQuery: 'logout',
     expectedToken: expected.token,
     expectedSessionId: expected.sessionId
-  }).then(function(response) {
-    if (generation != loginAttemptGeneration) {
-      return;
-    }
-    if (!response || response.error || response.ok !== true) {
-      logoutInProgress = false;
-      SetUnavailableState();
-      return;
-    }
-    logoutInProgress = false;
-    SetSignedOutStateTopbar();
-  }).catch(function() {
-    if (generation == loginAttemptGeneration) {
-      logoutInProgress = false;
-      SetUnavailableState();
-    }
-  });
+  }).then(finishLogout, finishLogout);
   return false;
 }
 
@@ -414,7 +405,6 @@ function InitializeTrackingFromLocation() {
   if (queryParameters.has('tracking')) {
     radarTrackingEnabled = true;
   }
-  return Promise.resolve();
 }
 
 function StartHeartbeat() {
@@ -428,13 +418,9 @@ reactiveData.signInLink = 'javascript:;';
 reactiveData.signInOnClick = StartLogin;
 reactiveData.trackingTriggerFunction = radarTrackingTrigger;
 
-InitializeTrackingFromLocation()
+InitializeTrackingFromLocation();
+Promise.resolve()
   .then(function() {
     return FindCharacter();
   })
-  .then(function() {
-    StartHeartbeat();
-  })
-  .catch(function() {
-    StartHeartbeat();
-  });
+  .then(StartHeartbeat, StartHeartbeat);
