@@ -17,6 +17,19 @@ restart. Fresh-profile consent display, cancellation, and accepted-installation
 checks were performed for signed unlisted 1.3.0; those results are not 1.3.1
 results.
 
+## Local 1.3.2 release candidate
+
+Version 1.3.2 is a local unsigned release candidate containing the accepted
+location-tracking updates:
+
+- preserves compatible current DOTLAN maps, including combined Faction Warfare maps;
+- adds Locate Once while continuous tracking is stopped; and
+- uses five-second automatic polling with request-spacing and cancellation guards.
+
+Automated packaging, archive, and lint checks passed. Native Firefox/live EVE
+checks, AMO submission, and signed-update verification remain pending. This
+candidate is not signed, uploaded, approved, or publicly available.
+
 ## Accepted release artifacts
 
 The recorded package source commit is
