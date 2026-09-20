@@ -11,6 +11,8 @@ var region = null;
 var locationStateSession = null;
 var characterHeartbeat = null;
 var logoutInProgress = false;
+var locationRequestInProgress = false;
+var lastAutomaticLocationRequest = null;
 
 function BackgroundMessage(request) {
   return new Promise(function(resolve, reject) {
@@ -88,6 +90,7 @@ function SetSignedInStateTopbar() {
   reactiveData.signInText = 'Sign Out';
   reactiveData.signInOnClick = RevokeToken;
   reactiveData.signInLink = 'javascript:;';
+  reactiveData.locateOnceOnClick = LocateOnce;
 }
 
 function SetSignedOutStateTopbar() {
@@ -99,6 +102,7 @@ function SetSignedOutStateTopbar() {
   reactiveData.signInText = 'Sign in';
   reactiveData.signInLink = 'javascript:;';
   reactiveData.signInOnClick = StartLogin;
+  reactiveData.locateOnceDisplay = 'none';
 }
 
 function SetUnavailableState() {
@@ -108,6 +112,7 @@ function SetUnavailableState() {
   reactiveData.signInLink = 'javascript:;';
   reactiveData.signInOnClick = RetrySession;
   reactiveData.notifierData = 'Authentication unavailable | ';
+  reactiveData.locateOnceDisplay = 'none';
 }
 
 function RetrySession(event) {
@@ -158,7 +163,8 @@ function ApplySession(session) {
   reactiveData.topbarContainerAnimation = 'none';
   reactiveData.topbarContainerAnimationModifier = 'none';
   reactiveData.trackingTriggerText = radarTrackingEnabled ? 'Stop Tracking' : 'Start Tracking';
-  reactiveData.notifierData = radarTrackingEnabled ? 'Tracking... | ' : 'Not Tracking | ';
+  reactiveData.notifierData = radarTrackingEnabled ? 'Tracking... | ' : '';
+  reactiveData.locateOnceDisplay = radarTrackingEnabled ? 'none' : '';
   reactiveData.characterPortrait = 'https://image.eveonline.com/Character/'+characterID+'_32.jpg';
   SetSignedInStateTopbar();
 }
@@ -235,14 +241,34 @@ function StartLogin(event) {
   return false;
 }
 
-function FindLocation(session) {
+function LocateOnce(event) {
+  if (event && event.preventDefault) {
+    event.preventDefault();
+  }
+  if (radarTrackingEnabled || locationRequestInProgress || activeSession == null) {
+    return false;
+  }
+  FindCharacter(true, activeSession);
+  return false;
+}
+
+function FindLocation(session, locateOnce, expectedTrackingState) {
   var nextCharacterLocation;
   var nextSystemName;
   var nextRegion;
+  var trackingState = expectedTrackingState;
   return SessionUseIsCurrent(session)
     .then(function(isCurrent) {
-      if (!isCurrent) {
+      if (!isCurrent || radarTrackingEnabled != trackingState) {
         throw {error: 'stale'};
+      }
+      if (!locateOnce) {
+        var now = Date.now();
+        if (lastAutomaticLocationRequest != null &&
+            now - lastAutomaticLocationRequest < 5000) {
+          throw {error: 'too_soon'};
+        }
+        lastAutomaticLocationRequest = now;
       }
       return axios({
         method: 'get',
@@ -256,7 +282,7 @@ function FindLocation(session) {
         if (!isCurrent) {
           throw {error: 'stale'};
         }
-        if (locationStateSession != null &&
+        if (!locateOnce && locationStateSession != null &&
             SessionIdentityMatches(locationStateSession, session) &&
             characterLocation == nextCharacterLocation) {
           throw 'no update';
@@ -282,19 +308,22 @@ function FindLocation(session) {
     })
     .then(function(response) {
       return SessionUseIsCurrent(session).then(function(isCurrent) {
-        if (!isCurrent || !radarTrackingEnabled) {
+        if (!isCurrent || radarTrackingEnabled != trackingState) {
           throw {error: 'stale'};
         }
         nextRegion = response.data.name.replace(/ /gi, '_');
-        characterLocation = nextCharacterLocation;
-        systemName = nextSystemName;
-        region = nextRegion;
-        locationStateSession = session;
-        reactiveData.characterLocation = systemName+', '+region;
-        if (location.pathname.split('#')[0] != '/map/'+region+'/'+systemName &&
-            location.pathname.split(':')[0] != '/map/'+region+'/'+systemName) {
-          ChangePage(region, systemName);
-        }
+        return ChangePage(nextRegion, nextSystemName, nextCharacterLocation,
+          trackingState, session, ExistingWaypointString(nextSystemName))
+          .then(function(accepted) {
+            if (!accepted) {
+              throw {error: 'stale'};
+            }
+            characterLocation = nextCharacterLocation;
+            systemName = nextSystemName;
+            region = nextRegion;
+            locationStateSession = session;
+            reactiveData.characterLocation = systemName+', '+region;
+          });
       });
     })
     .catch(function(error) {
@@ -309,19 +338,35 @@ function FindLocation(session) {
     });
 }
 
-function FindCharacter() {
-  return syncData().then(function(session) {
-    if (!session || !radarTrackingEnabled) {
+function FindCharacter(locateOnce, expectedSession) {
+  if (locationRequestInProgress) {
+    return Promise.resolve();
+  }
+  var expectedTrackingState = radarTrackingEnabled;
+  locationRequestInProgress = true;
+  var sessionRequest = expectedSession == null ? syncData() : RequestSession(expectedSession);
+  return sessionRequest.then(function(session) {
+    if (!session || session.error ||
+        (locateOnce ? radarTrackingEnabled : !radarTrackingEnabled) ||
+        radarTrackingEnabled != expectedTrackingState) {
       return;
     }
-    if (reactiveData.trackingTriggerText == 'Start Tracking') {
+    if (expectedSession != null && !SessionIdentityMatches(expectedSession, session)) {
+      return;
+    }
+    if (!locateOnce && reactiveData.trackingTriggerText == 'Start Tracking') {
       radarTrackingTrigger();
     }
-    return FindLocation(session);
+    return FindLocation(session, !!locateOnce, expectedTrackingState);
   }).catch(function(error) {
     if (error && error.error == 'unavailable') {
       SetUnavailableState();
     }
+  }).then(function(result) {
+    locationRequestInProgress = false;
+    return result;
+  }, function() {
+    locationRequestInProgress = false;
   });
 }
 
@@ -331,10 +376,55 @@ function LocationStateIsCurrent(session) {
     typeof region == 'string' && region.length > 0;
 }
 
-function ChangePage(mapRegion, mapSystemName) {
+function CurrentMapContainsSystem(mapObject, systemID) {
+  try {
+    return mapObject.contentDocument != null &&
+      mapObject.contentDocument.getElementById('sys'+systemID) != null;
+  }
+  catch (error) {
+    return false;
+  }
+}
+
+function SelectMapName(systemID, fallbackRegion) {
+  var match = window.location.pathname.match(/^\/map\/([^/]+)/);
+  var currentMapName = match == null ? null : match[1];
+  var mapObject = document.getElementById('map');
+  if (currentMapName == null || mapObject == null) {
+    return Promise.resolve(fallbackRegion);
+  }
+  if (CurrentMapContainsSystem(mapObject, systemID)) {
+    return Promise.resolve(currentMapName);
+  }
+  try {
+    if ((mapObject.contentDocument != null &&
+         mapObject.contentDocument.readyState != 'loading') ||
+        typeof mapObject.addEventListener != 'function') {
+      return Promise.resolve(fallbackRegion);
+    }
+  }
+  catch (error) {
+    return Promise.resolve(fallbackRegion);
+  }
+  return new Promise(function(resolve) {
+    var settled = false;
+    var finish = function() {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      mapObject.removeEventListener('load', finish);
+      resolve(CurrentMapContainsSystem(mapObject, systemID) ? currentMapName : fallbackRegion);
+    };
+    var timeout = setTimeout(finish, 1000);
+    mapObject.addEventListener('load', finish);
+  });
+}
+
+function ExistingWaypointString(mapSystemName) {
   var i = 1;
   var waypointArray = window.location.pathname.split('#')[0].split(':');
-  var hash = window.location.hash;
   if (mapSystemName == waypointArray[1]) {
     i += 1;
   }
@@ -342,7 +432,24 @@ function ChangePage(mapRegion, mapSystemName) {
   for (; i < waypointArray.length; i++) {
     waypointString += ':' + waypointArray[i];
   }
-  location.href = 'https://evemaps.dotlan.net/map/'+mapRegion+'/'+mapSystemName+waypointString+'?tracking'+hash;
+  return waypointString;
+}
+
+function ChangePage(mapRegion, mapSystemName, systemID, trackingState, session, waypointString) {
+  return SelectMapName(systemID, mapRegion).then(function(mapName) {
+    return SessionUseIsCurrent(session).then(function(isCurrent) {
+      if (!isCurrent || radarTrackingEnabled != trackingState) {
+        return false;
+      }
+      var trackingQuery = trackingState ? '?tracking' : '';
+      var url = 'https://evemaps.dotlan.net/map/'+mapName+'/'+mapSystemName+
+        waypointString+trackingQuery+window.location.hash;
+      if (window.location.href != url) {
+        window.location.assign(url);
+      }
+      return true;
+    });
+  });
 }
 
 function RevokeToken() {
@@ -386,7 +493,8 @@ function RevokeToken() {
 function radarTrackingTrigger() {
   if (reactiveData.trackingTriggerText == 'Stop Tracking') {
     reactiveData.trackingTriggerText = 'Start Tracking';
-    reactiveData.notifierData = 'Not Tracking | ';
+    reactiveData.notifierData = '';
+    reactiveData.locateOnceDisplay = '';
     reactiveData.topbarContainerAnimation = 'slideIn 1s ease-out 0.5s 1 forwards';
     reactiveData.topbarContainerAnimationModifier = 'slideIn 1s ease-out 0.5s 1 forwards';
     radarTrackingEnabled = false;
@@ -394,6 +502,7 @@ function radarTrackingTrigger() {
   else {
     reactiveData.trackingTriggerText = 'Stop Tracking';
     reactiveData.notifierData = 'Tracking... | ';
+    reactiveData.locateOnceDisplay = 'none';
     reactiveData.topbarContainerAnimation = 'none';
     reactiveData.topbarContainerAnimationModifier = 'none';
     radarTrackingEnabled = true;
@@ -409,7 +518,7 @@ function InitializeTrackingFromLocation() {
 
 function StartHeartbeat() {
   if (characterHeartbeat == null) {
-    characterHeartbeat = setInterval(FindCharacter, 1000);
+    characterHeartbeat = setInterval(FindCharacter, 5000);
   }
 }
 
@@ -419,8 +528,4 @@ reactiveData.signInOnClick = StartLogin;
 reactiveData.trackingTriggerFunction = radarTrackingTrigger;
 
 InitializeTrackingFromLocation();
-Promise.resolve()
-  .then(function() {
-    return FindCharacter();
-  })
-  .then(StartHeartbeat, StartHeartbeat);
+syncData().then(StartHeartbeat, StartHeartbeat);

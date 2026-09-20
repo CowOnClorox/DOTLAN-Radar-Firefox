@@ -4,7 +4,7 @@ DOTLAN ESI Radar is a small Firefox port of the original [DOTLAN Radar Chrome ex
 
 It lets you:
 
-- track your signed-in EVE character's location on DOTLAN;
+- track your signed-in EVE character's location on DOTLAN, continuously or with Locate Once;
 - start or stop tracking; and
 - send waypoints to the EVE client.
 

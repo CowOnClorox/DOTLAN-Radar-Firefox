@@ -60,30 +60,41 @@
   color: #fff;
 }
 
-#radarTrackingButton {
+#radarTrackingButton,
+#radarLocateOnce {
   font-weight: bold;
   color: #8F8B2C;
 }
 
-#radarTrackingButton:hover {
+#radarTrackingButton:hover,
+#radarLocateOnce:hover {
   color: #666;
 }
 
-#radarTrackingButton:active {
+#radarTrackingButton:active,
+#radarLocateOnce:active {
   color: #444;
 }
 
-#radarTrackingButtonDark {
+#radarTrackingButtonDark,
+#radarLocateOnceDark {
   font-weight: bold;
   color: #bbb;
 }
 
-#radarTrackingButtonDark:hover {
+#radarTrackingButtonDark:hover,
+#radarLocateOnceDark:hover {
   color: #ddd;
 }
 
-#radarTrackingButtonDark:active {
+#radarTrackingButtonDark:active,
+#radarLocateOnceDark:active {
   color: #fff;
+}
+
+#radarLocateOnce,
+#radarLocateOnceDark {
+  margin-left: 5px;
 }
 
 #radarColumnLeft {

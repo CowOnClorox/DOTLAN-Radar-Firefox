@@ -54,8 +54,8 @@ function addWaypoint(location, asDestination) {
           waypointString = waypointString.substr(waypointString.substr(1).indexOf(':') + 1);
         }
       }
-      var hash = window.location.hash;
-      window.location.assign('https://evemaps.dotlan.net/map/'+region+'/'+systemName+waypointString+'?tracking'+hash);
+      return ChangePage(region, systemName, characterLocation,
+        radarTrackingEnabled, verified, waypointString);
     }
     });
   })
@@ -68,7 +68,8 @@ function addWaypoint(location, asDestination) {
  * Removes waypoint from DOTLAN map, note that there is no way at this time to remove it from EVE client
  */
 function removeWaypoint(location) {
-  if (!LocationStateIsCurrent(GetSessionSnapshot())) {
+  var actionSession = GetSessionSnapshot();
+  if (!LocationStateIsCurrent(actionSession)) {
     return;
   }
   var waypointString = '';
@@ -79,8 +80,8 @@ function removeWaypoint(location) {
       waypointString += ':'+waypointArray[i];
     }
   }
-  var hash = window.location.hash;
-  window.location.assign('https://evemaps.dotlan.net/map/'+region+'/'+systemName+waypointString+'?tracking'+hash);
+  return ChangePage(region, systemName, characterLocation, radarTrackingEnabled,
+    actionSession, waypointString);
 }
 
 /*

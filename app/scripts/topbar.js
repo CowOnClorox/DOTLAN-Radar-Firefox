@@ -12,6 +12,8 @@ var reactiveData = {
     signInText: 'Sign in',
     signInLink: 'javascript:;',
     signInOnClick: '',
+    locateOnceDisplay: 'none',
+    locateOnceOnClick: '',
     trackingTriggerText: 'Stop Tracking',
     trackingTriggerFunction: ''
 }
@@ -104,7 +106,19 @@ var vm = new Vue({
                 on: {
                   click: reactiveData.trackingTriggerFunction
                 }
-              }, reactiveData.trackingTriggerText)
+              }, reactiveData.trackingTriggerText),
+              createElement('a', {
+                attrs: {
+                  id: 'radarLocateOnce'+linkDark,
+                  href: 'javascript:;'
+                },
+                style: {
+                  display: reactiveData.locateOnceDisplay
+                },
+                on: {
+                  click: reactiveData.locateOnceOnClick
+                }
+              }, 'Locate Once')
             ]),
             createElement('td', {
               attrs: {
